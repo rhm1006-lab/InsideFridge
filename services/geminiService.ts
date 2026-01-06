@@ -15,14 +15,24 @@ export const predictCategory = async (
     const ai = getClient();
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `식재료 이름: "${itemName}". 
-      이 식재료가 속할 가장 적절한 카테고리를 다음 목록 중에서 딱 하나만 골라줘: ${categories.join(", ")}.
-      다른 말은 하지 말고 카테고리 이름만 출력해.`,
+      contents: `Classify the food item "${itemName}" into exactly one of these categories: [${categories.join(", ")}].
+      Return ONLY the exact category name from the list. If it fits multiple, pick the most specific one. If completely unknown, return nothing.`,
     });
     const text = response.text?.trim();
+    
     // Validate if the response matches one of the categories
-    return categories.find(c => c === text) || categories[0];
-  } catch (error) {
+    // Flexible matching: check if the response includes the category or vice versa, but prefer exact match
+    const exactMatch = categories.find(c => c === text);
+    if (exactMatch) return exactMatch;
+    
+    // Fallback: check for partial match if AI was chatty (though prompt says return ONLY name)
+    const partialMatch = categories.find(c => text?.includes(c));
+    return partialMatch || null;
+  } catch (error: any) {
+    if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota')) {
+       console.warn("Gemini API quota exceeded for category prediction. Switching to manual mode.");
+       return null;
+    }
     console.error("Category prediction error:", error);
     return null;
   }
@@ -63,7 +73,11 @@ export const parseVoiceInput = async (
     const text = response.text;
     if (!text) return [];
     return JSON.parse(text);
-  } catch (error) {
+  } catch (error: any) {
+    if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota')) {
+       console.warn("Gemini API quota exceeded for voice input.");
+       return [];
+    }
     console.error("Gemini parse error:", error);
     return [];
   }
@@ -137,7 +151,11 @@ export const getRecipeSuggestions = async (
     const text = response.text;
     if (!text) return [];
     return JSON.parse(text);
-  } catch (error) {
+  } catch (error: any) {
+    if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota')) {
+       console.warn("Gemini API quota exceeded for recipes.");
+       return [];
+    }
     console.error("Gemini recipe error:", error);
     return [];
   }

@@ -38,6 +38,7 @@ export interface WeatherData {
   humidity: number;
   wind: string;
   pm25: string;
+  code?: number; // WMO Weather Code for icon mapping
 }
 
 export interface RecipeIngredient {

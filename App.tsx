@@ -5,11 +5,13 @@ import {
   ArrowUpAZ, Clock, Edit2, X, Check, Save,
   Snowflake, Sun, Search, CloudRain, Wind, Droplets,
   Volume2, AlertCircle, UserPlus, User, PackagePlus,
-  Moon, ShoppingCart, ChevronDown, ChevronUp, Pencil
+  Moon, ShoppingCart, ChevronDown, ChevronUp, Pencil,
+  RefreshCw, Cloud, CloudLightning
 } from 'lucide-react';
-import { FridgeConfig, DoorConfig, FoodItem, SortMode, DoorType, UserProfile, RecipeSuggestion } from './types';
+import { FridgeConfig, DoorConfig, FoodItem, SortMode, DoorType, UserProfile, RecipeSuggestion, WeatherData } from './types';
 import { DEFAULT_CATEGORIES, MOCK_WEATHER } from './constants';
 import * as GeminiService from './services/geminiService';
+import * as WeatherService from './services/weatherService';
 
 // --- Helper Components ---
 
@@ -64,6 +66,13 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isWeatherOpen, setIsWeatherOpen] = useState(false);
   
+  // Weather State
+  const [weather, setWeather] = useState<WeatherData>(MOCK_WEATHER);
+
+  // Search State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isVoiceSearching, setIsVoiceSearching] = useState(false);
+
   // Edit Item State
   const [isEditItemOpen, setIsEditItemOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<FoodItem | null>(null);
@@ -71,6 +80,9 @@ export default function App() {
   const [editQty, setEditQty] = useState(1);
   const [editCat, setEditCat] = useState('');
   const [editDoor, setEditDoor] = useState('');
+
+  // Category Management State
+  const [newCategoryInput, setNewCategoryInput] = useState('');
 
   // UI State for Door Expansion
   const [expandedDoors, setExpandedDoors] = useState<string[]>([]);
@@ -87,10 +99,17 @@ export default function App() {
   // Add Item State
   const [newItemName, setNewItemName] = useState('');
   const [newItemQty, setNewItemQty] = useState(1);
-  const [newItemCat, setNewItemCat] = useState(categories[0]);
+  const [newItemCat, setNewItemCat] = useState(''); // Initialized as empty
   const [newItemDoor, setNewItemDoor] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isPredictingCat, setIsPredictingCat] = useState(false);
+
+  // Settings Reset State
+  const [showResetVerify, setShowResetVerify] = useState(false);
+  const [resetInput, setResetInput] = useState('');
+
+  // Cache for category predictions to save API calls
+  const predictionCache = useRef<Record<string, string>>({});
 
   // Persistence
   useEffect(() => localStorage.setItem('fridge_config', JSON.stringify(config)), [config]);
@@ -119,7 +138,7 @@ export default function App() {
 
   // Auto-sleep timer when manually woken up during sleep hours
   useEffect(() => {
-    let sleepTimer: NodeJS.Timeout;
+    let sleepTimer: ReturnType<typeof setTimeout>;
     if (isManuallyAwake && (currentTime.getHours() >= 22 || currentTime.getHours() < 7)) {
        // Go back to sleep after 30 seconds of inactivity
        sleepTimer = setTimeout(() => {
@@ -130,6 +149,26 @@ export default function App() {
     return () => clearTimeout(sleepTimer);
   }, [isManuallyAwake, currentTime]);
 
+  // Fetch Weather Logic
+  useEffect(() => {
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          try {
+            const { latitude, longitude } = position.coords;
+            const data = await WeatherService.fetchWeatherData(latitude, longitude);
+            setWeather(data);
+          } catch (error) {
+            console.error("Failed to update weather", error);
+            // Fallback to mock data is implicit since state initialized with it
+          }
+        },
+        (error) => {
+          console.warn("Location access denied, using mock weather", error);
+        }
+      );
+    }
+  }, []);
 
   // Initial Setup of doors if empty
   useEffect(() => {
@@ -152,26 +191,144 @@ export default function App() {
     setIsGeneratingRecipes(false);
   };
 
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      if(items.length > 0 && config.isSetup) fetchRecipes();
-    }, 2000);
-    return () => clearTimeout(timeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items.length, config.isSetup, config.userProfiles]);
+  // --- Helpers for Category Prediction & Icons ---
+  // ... (checkLocalHeuristics and getCategoryIcon implementation unchanged)
+  const checkLocalHeuristics = (name: string): string | null => {
+    const n = name.replace(/\s+/g, '');
+    
+    // Complex/Longer matches first to avoid incorrect substrings
+    if (n.includes('양배추')) return categories.find(c => c.includes('잎채소')) || '잎채소 (상추/깻잎 등)';
+    if (n.includes('배추') || n.includes('김치') || n.includes('깍두기')) return categories.find(c => c.includes('김치')) || '김치/절임배추';
+    if (n.includes('아이스크림')) return categories.find(c => c.includes('아이스크림')) || '아이스크림';
+    
+    // Root Veg
+    if (n.includes('양파') || n.includes('마늘') || n.includes('감자') || n.includes('당근') || n.includes('고구마') || n.includes('무') || n.includes('연근') || n.includes('우엉')) return categories.find(c => c.includes('뿌리채소')) || '뿌리채소 (감자/당근 등)';
+    
+    // Leaf Veg
+    if (n.includes('대파') || n.includes('쪽파') || n.includes('상추') || n.includes('깻잎') || n.includes('시금치') || n.includes('부추') || n.includes('쑥갓') || n.includes('치커리')) return categories.find(c => c.includes('잎채소')) || '잎채소 (상추/깻잎 등)';
+
+    // Fruit Veg
+    if (n.includes('고추') || n.includes('오이') || n.includes('호박') || n.includes('토마토') || n.includes('가지') || n.includes('피망') || n.includes('파프리카')) return categories.find(c => c.includes('열매채소')) || '열매채소 (고추/오이 등)';
+    
+    // Mushrooms
+    if (n.includes('버섯') || n.includes('팽이') || n.includes('표고') || n.includes('송이') || n.includes('느타리')) return categories.find(c => c.includes('버섯')) || '버섯류';
+
+    // Fruits
+    if (n.includes('사과') || n.includes('배') || n.includes('포도') || n.includes('딸기') || n.includes('바나나') || n.includes('귤') || n.includes('오렌지') || n.includes('복숭아') || n.includes('자두') || n.includes('감') || n.includes('수박') || n.includes('참외') || n.includes('키위') || n.includes('망고') || n.includes('파인애플') || n.includes('체리') || n.includes('블루베리')) {
+        if (n.includes('망고') || n.includes('파인애플') || n.includes('바나나')) return categories.find(c => c.includes('열대')) || '열대과일';
+        return categories.find(c => c.includes('과일')) || '과일 (사과/배 등)';
+    }
+
+    // Meat/Seafood
+    if (n.includes('소고기') || n.includes('한우') || n.includes('스테이크') || n.includes('차돌') || n.includes('양지')) return categories.find(c => c.includes('소고기')) || '소고기';
+    if (n.includes('돼지') || n.includes('삼겹살') || n.includes('목살') || n.includes('햄') || n.includes('소시지') || n.includes('베이컨') || n.includes('스팸')) return categories.find(c => c.includes('돼지')) || '돼지고기';
+    if (n.includes('닭') || n.includes('치킨') || n.includes('오리')) return categories.find(c => c.includes('닭')) || '닭/오리고기';
+    if (n.includes('생선') || n.includes('고등어') || n.includes('오징어') || n.includes('새우') || n.includes('갈치') || n.includes('조기') || n.includes('멸치') || n.includes('참치') || n.includes('낙지') || n.includes('문어') || n.includes('게') || n.includes('조개') || n.includes('전복')) return categories.find(c => c.includes('생선')) || '생선/해산물';
+    
+    // Dairy/Eggs/Tofu
+    if (n.includes('우유') || n.includes('치즈') || n.includes('요거트') || n.includes('버터') || n.includes('크림')) return categories.find(c => c.includes('우유')) || '우유/유제품';
+    if (n.includes('계란') || n.includes('달걀') || n.includes('메추리알')) return categories.find(c => c.includes('계란')) || '계란/알류';
+    if (n.includes('두부') || n.includes('콩나물') || n.includes('콩')) return categories.find(c => c.includes('두부')) || '두부/콩류';
+    
+    // Drinks/Snacks/Others
+    if (n.includes('물') || n.includes('주스') || n.includes('콜라') || n.includes('사이다') || n.includes('맥주') || n.includes('소주') || n.includes('커피') || n.includes('탄산')) return categories.find(c => c.includes('음료')) || '음료/주류';
+    if (n.includes('빵') || n.includes('케이크') || n.includes('샌드위치') || n.includes('떡') || n.includes('과자') || n.includes('초콜릿') || n.includes('쿠키')) return categories.find(c => c.includes('빵')) || '빵/떡/간식';
+    if (n.includes('냉동') || n.includes('만두') || n.includes('피자') || n.includes('돈까스')) return categories.find(c => c.includes('냉동 간편식')) || '냉동 간편식';
+    if (n.includes('소스') || n.includes('장') || n.includes('케첩') || n.includes('마요네즈') || n.includes('오일') || n.includes('식용유') || n.includes('간장') || n.includes('식초')) return categories.find(c => c.includes('소스')) || '소스/드레싱/양념';
+
+    return null;
+  };
+
+  const getCategoryIcon = (category: string) => {
+    if (category.includes('잎채소')) return '🥬';
+    if (category.includes('뿌리')) return '🥕';
+    if (category.includes('열매')) return '🥒';
+    if (category.includes('버섯')) return '🍄';
+    if (category.includes('과일')) return '🍎';
+    if (category.includes('열대')) return '🍌';
+    if (category.includes('소고기')) return '🥩';
+    if (category.includes('돼지')) return '🥓';
+    if (category.includes('닭') || category.includes('오리')) return '🍗';
+    if (category.includes('생선') || category.includes('해산물')) return '🐟';
+    if (category.includes('우유') || category.includes('유제품')) return '🥛';
+    if (category.includes('계란') || category.includes('알류')) return '🥚';
+    if (category.includes('두부') || category.includes('콩')) return '🫘';
+    if (category.includes('김치')) return '🥬';
+    if (category.includes('반찬')) return '🍱';
+    if (category.includes('소스') || category.includes('양념')) return '🥫';
+    if (category.includes('음료') || category.includes('주류')) return '🥤';
+    if (category.includes('빵') || category.includes('떡')) return '🍞';
+    if (category.includes('냉동')) return '❄️';
+    if (category.includes('아이스크림')) return '🍦';
+    return '📦';
+  };
+
+  const getWeatherIcon = () => {
+    const code = weather.code;
+    if (code === undefined) return <Sun className="w-6 h-6 text-orange-400" />;
+    
+    if (code <= 1) return <Sun className="w-6 h-6 text-orange-400" />;
+    if (code <= 3) return <Cloud className="w-6 h-6 text-gray-400" />;
+    if (code <= 48) return <Cloud className="w-6 h-6 text-slate-300" />;
+    if (code <= 67) return <CloudRain className="w-6 h-6 text-blue-400" />;
+    if (code <= 77) return <Snowflake className="w-6 h-6 text-sky-200" />;
+    if (code <= 82) return <CloudRain className="w-6 h-6 text-blue-600" />;
+    if (code <= 86) return <Snowflake className="w-6 h-6 text-sky-300" />;
+    if (code <= 99) return <CloudLightning className="w-6 h-6 text-purple-500" />;
+    return <Sun className="w-6 h-6 text-orange-400" />;
+  };
+
+  const getWeatherLargeIcon = () => {
+    const code = weather.code;
+    if (code === undefined) return <Sun className="w-24 h-24 text-orange-400 mx-auto mb-4 animate-spin-slow" />;
+    
+    if (code <= 1) return <Sun className="w-24 h-24 text-orange-400 mx-auto mb-4 animate-spin-slow" />;
+    if (code <= 3) return <Cloud className="w-24 h-24 text-gray-400 mx-auto mb-4" />;
+    if (code <= 48) return <Cloud className="w-24 h-24 text-slate-300 mx-auto mb-4" />;
+    if (code <= 67) return <CloudRain className="w-24 h-24 text-blue-400 mx-auto mb-4" />;
+    if (code <= 77) return <Snowflake className="w-24 h-24 text-sky-200 mx-auto mb-4" />;
+    if (code <= 82) return <CloudRain className="w-24 h-24 text-blue-600 mx-auto mb-4" />;
+    if (code <= 86) return <Snowflake className="w-24 h-24 text-sky-300 mx-auto mb-4" />;
+    if (code <= 99) return <CloudLightning className="w-24 h-24 text-purple-500 mx-auto mb-4" />;
+    return <Sun className="w-24 h-24 text-orange-400 mx-auto mb-4" />;
+  };
 
   // Auto Category Prediction
   useEffect(() => {
-    if (!newItemName || newItemName.length < 2) return;
+    setNewItemCat('');
+
+    const trimmedName = newItemName.trim();
+    if (!trimmedName) return;
+
+    // 1. Try local heuristics first to save API quota
+    const localPrediction = checkLocalHeuristics(trimmedName);
+    if (localPrediction) {
+      setNewItemCat(localPrediction);
+      return;
+    }
+
+    // 2. Check Cache
+    if (predictionCache.current[trimmedName]) {
+      setNewItemCat(predictionCache.current[trimmedName]);
+      return;
+    }
     
+    // 3. Fallback to API with a longer debounce (1000ms) to prevent quota errors
     const timeout = setTimeout(async () => {
       setIsPredictingCat(true);
-      const predicted = await GeminiService.predictCategory(newItemName, categories);
-      if (predicted) {
-        setNewItemCat(predicted);
+      try {
+        const predicted = await GeminiService.predictCategory(trimmedName, categories);
+        if (predicted) {
+          setNewItemCat(predicted);
+          // Cache the result
+          predictionCache.current[trimmedName] = predicted;
+        }
+      } catch (error) {
+        console.error("Prediction failed", error);
+      } finally {
+        setIsPredictingCat(false);
       }
-      setIsPredictingCat(false);
-    }, 800); 
+    }, 1000); 
 
     return () => clearTimeout(timeout);
   }, [newItemName, categories]);
@@ -198,7 +355,7 @@ export default function App() {
 
   const handleAddItem = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!newItemName) return;
+    if (!newItemName || !newItemCat) return;
 
     const item: FoodItem = {
       id: Date.now().toString() + Math.random().toString(),
@@ -209,7 +366,7 @@ export default function App() {
       entryDate: Date.now()
     };
     setItems(prev => [item, ...prev]);
-    setNewItemName('');
+    // Do not clear state here to prevent modal flashing/reopening perception
     setIsAddItemOpen(false);
   };
 
@@ -278,6 +435,30 @@ export default function App() {
     recognition.onerror = () => setIsListening(false);
   };
 
+  // --- Voice Search Logic ---
+  const handleVoiceSearch = async () => {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      alert("이 브라우저는 음성 검색을 지원하지 않습니다.");
+      return;
+    }
+
+    setIsVoiceSearching(true);
+    // @ts-ignore
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'ko-KR'; 
+    recognition.start();
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setSearchQuery(transcript);
+      setIsVoiceSearching(false);
+    };
+
+    recognition.onerror = () => setIsVoiceSearching(false);
+    recognition.onend = () => setIsVoiceSearching(false);
+  };
+
   const updateItemQty = (id: string, delta: number) => {
     setItems(prev => prev.map(item => {
       if (item.id === id) {
@@ -301,6 +482,15 @@ export default function App() {
   const getFilteredAndSortedItems = (doorId: string) => {
     let filtered = items.filter(i => i.doorId === doorId);
     
+    // Apply Search Query
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(item => 
+        item.name.toLowerCase().includes(query) || 
+        item.category.toLowerCase().includes(query)
+      );
+    }
+
     return filtered.sort((a, b) => {
       switch (sortMode) {
         case 'name': return a.name.localeCompare(b.name);
@@ -347,6 +537,28 @@ export default function App() {
      
      if (warnings.length > 0) return warnings.join(', ');
      return null;
+  };
+  
+  const handleHardReset = () => {
+    if (resetInput.trim() === config.name.trim()) {
+      localStorage.clear();
+      window.location.reload();
+    } else {
+      alert("냉장고 이름이 일치하지 않습니다.");
+    }
+  };
+
+  const handleAddCategory = () => {
+    if (newCategoryInput && !categories.includes(newCategoryInput)) {
+      setCategories([...categories, newCategoryInput]);
+      setNewCategoryInput('');
+    }
+  };
+
+  const handleDeleteCategory = (cat: string) => {
+    if(confirm(`'${cat}' 카테고리를 삭제하시겠습니까?`)) {
+      setCategories(categories.filter(c => c !== cat));
+    }
   };
 
   // --- Views ---
@@ -435,6 +647,9 @@ export default function App() {
   const dateStr = currentTime.toLocaleDateString('ko-KR', { weekday: 'long', month: 'long', day: 'numeric' });
   const timeStr = currentTime.toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
+  // Add Item Validation
+  const isAddItemValid = newItemName.trim().length > 0 && newItemCat.length > 0;
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col">
       {/* --- Header --- */}
@@ -458,10 +673,10 @@ export default function App() {
             className="flex items-center gap-3 bg-blue-50 px-4 py-2 rounded-full hover:bg-blue-100 transition group"
           >
             <div className="bg-white p-2 rounded-full shadow-sm group-hover:scale-110 transition">
-              <Sun className="w-6 h-6 text-orange-400" />
+              {getWeatherIcon()}
             </div>
             <div className="text-left">
-              <div className="text-lg font-bold text-slate-700">{MOCK_WEATHER.temp}°C {MOCK_WEATHER.condition}</div>
+              <div className="text-lg font-bold text-slate-700">{weather.temp}°C {weather.condition}</div>
               <div className="text-xs text-slate-400">자세히 보기</div>
             </div>
           </button>
@@ -489,6 +704,16 @@ export default function App() {
                 <ChefHat className="w-6 h-6" />
                 AI 셰프 추천 메뉴
                 {isGeneratingRecipes && <span className="text-sm font-normal opacity-75 animate-pulse ml-2">생각 중...</span>}
+                {!isGeneratingRecipes && items.length > 0 && (
+                   <button 
+                     onClick={fetchRecipes}
+                     className="p-1.5 bg-white/20 hover:bg-white/30 rounded-full transition ml-auto flex items-center gap-1 text-sm font-normal"
+                     title="레시피 새로고침"
+                   >
+                     <RefreshCw className="w-4 h-4 text-white" />
+                     새로고침
+                   </button>
+                )}
               </h2>
               
               {recipes.length > 0 ? (
@@ -507,8 +732,8 @@ export default function App() {
                            <AlertCircle className="w-5 h-5 text-red-300 animate-pulse" />
                          )}
                       </div>
-                      <h3 className="font-bold text-lg mb-1 leading-tight">{recipe.title}</h3>
-                      <p className="text-sm text-indigo-100 line-clamp-2 mb-2">{recipe.description}</p>
+                      <h3 className="font-bold text-lg mb-2 leading-tight">{recipe.title}</h3>
+                      {/* Description removed for compactness */}
                       <div className="flex items-center gap-2 text-xs opacity-80">
                          <span>🔥 {recipe.calories} kcal</span>
                          <span>•</span>
@@ -530,28 +755,51 @@ export default function App() {
           </div>
         </div>
 
-        {/* Sorting & Global Controls */}
-        <div className="flex justify-between items-center bg-white p-2 rounded-2xl shadow-sm">
-          <div className="flex gap-2">
-            {(['recent', 'oldest', 'name', 'quantity'] as SortMode[]).map(mode => (
-              <button
-                key={mode}
-                onClick={() => setSortMode(mode)}
-                className={`px-4 py-2 rounded-xl text-sm font-medium transition ${
-                  sortMode === mode ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-              >
-                정렬: {getSortLabel(mode)}
-              </button>
-            ))}
+        {/* Search & Sorting & Global Controls */}
+        <div className="bg-white p-3 rounded-2xl shadow-sm flex flex-col xl:flex-row gap-4 items-center">
+          {/* Search Bar */}
+          <div className="flex-1 w-full relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+            <input 
+              type="text" 
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="식재료 또는 카테고리 검색..."
+              className="w-full pl-10 pr-12 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-500 transition"
+            />
+            <button 
+              onClick={handleVoiceSearch}
+              className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg transition ${
+                isVoiceSearching ? 'text-red-500 bg-red-50 animate-pulse' : 'text-slate-400 hover:text-blue-500 hover:bg-blue-50'
+              }`}
+              title="음성 검색"
+            >
+              <Mic className="w-5 h-5" />
+            </button>
           </div>
-          <button 
-            onClick={() => setIsCategoryManagerOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-xl"
-          >
-            <LayoutGrid className="w-4 h-4" />
-            카테고리 관리
-          </button>
+
+          <div className="flex gap-2 w-full xl:w-auto overflow-x-auto pb-1 xl:pb-0 justify-start xl:justify-end">
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl shrink-0">
+              {(['recent', 'oldest', 'name', 'quantity'] as SortMode[]).map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => setSortMode(mode)}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                    sortMode === mode ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  {getSortLabel(mode)}
+                </button>
+              ))}
+            </div>
+            <button 
+              onClick={() => setIsCategoryManagerOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 border border-slate-200 rounded-xl shrink-0"
+            >
+              <LayoutGrid className="w-4 h-4" />
+              카테고리
+            </button>
+          </div>
         </div>
 
         {/* Fridge Grid Layout */}
@@ -563,7 +811,9 @@ export default function App() {
           {config.doors.map((door) => {
             const allItems = getFilteredAndSortedItems(door.id);
             const isExpanded = expandedDoors.includes(door.id);
-            const visibleItems = isExpanded ? allItems : allItems.slice(0, 5);
+            // If searching, show all matches. If not searching, use expand logic.
+            const shouldShowAll = isExpanded || searchQuery.trim().length > 0;
+            const visibleItems = shouldShowAll ? allItems : allItems.slice(0, 5);
             
             return (
               <div key={door.id} className="bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col overflow-hidden">
@@ -579,15 +829,18 @@ export default function App() {
                     <div>
                       <div className="flex items-center gap-2">
                          <h3 className="font-bold text-slate-700">{door.name}</h3>
-                         {isExpanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                         {!searchQuery && (isExpanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />)}
                       </div>
                       <p className="text-xs text-slate-400">
-                        {allItems.length}개 품목 {allItems.length > 5 && !isExpanded ? '(5개만 표시됨)' : ''}
+                        {allItems.length}개 품목 {allItems.length > 5 && !shouldShowAll ? '(5개만 표시됨)' : ''}
                       </p>
                     </div>
                   </div>
                   <button 
                     onClick={() => {
+                      setNewItemName('');
+                      setNewItemCat('');
+                      setNewItemQty(1);
                       setNewItemDoor(door.id);
                       setIsAddItemOpen(true);
                     }}
@@ -602,7 +855,7 @@ export default function App() {
                   {visibleItems.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-slate-300">
                       <Search className="w-12 h-12 mb-2 opacity-20" />
-                      <p>비어있음</p>
+                      <p>{searchQuery ? '검색 결과 없음' : '비어있음'}</p>
                     </div>
                   ) : (
                     visibleItems.map(item => {
@@ -611,7 +864,7 @@ export default function App() {
                         <div key={item.id} className="bg-white border border-slate-100 rounded-2xl p-3 flex justify-between items-center hover:shadow-md transition group relative">
                           <div className="flex items-center gap-3">
                             <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-lg">
-                              🍽️
+                              {getCategoryIcon(item.category)}
                             </div>
                             <div>
                               <div className="flex items-center gap-2">
@@ -662,7 +915,7 @@ export default function App() {
                       );
                     })
                   )}
-                  {allItems.length > 5 && !isExpanded && (
+                  {allItems.length > 5 && !shouldShowAll && (
                      <button 
                        onClick={() => toggleDoorExpansion(door.id)}
                        className="w-full text-center text-sm text-slate-500 py-2 hover:bg-slate-50 rounded-xl"
@@ -745,6 +998,7 @@ export default function App() {
                     onChange={e => setNewItemCat(e.target.value)}
                     className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
                   >
+                    <option value="" disabled>카테고리 선택</option>
                     {categories.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
@@ -763,7 +1017,15 @@ export default function App() {
                  </select>
               </div>
 
-              <button type="submit" className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold text-lg hover:bg-slate-800 transition">
+              <button 
+                type="submit" 
+                disabled={!isAddItemValid}
+                className={`w-full py-4 rounded-xl font-bold text-lg transition ${
+                   isAddItemValid 
+                   ? 'bg-slate-900 text-white hover:bg-slate-800' 
+                   : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                }`}
+              >
                 보관하기
               </button>
             </form>
@@ -901,30 +1163,30 @@ export default function App() {
       {isWeatherOpen && (
         <Modal title="현재 날씨 상세" onClose={() => setIsWeatherOpen(false)}>
           <div className="text-center py-6">
-            <Sun className="w-24 h-24 text-orange-400 mx-auto mb-4 animate-spin-slow" />
-            <div className="text-5xl font-bold text-slate-800 mb-2">{MOCK_WEATHER.temp}°C</div>
-            <div className="text-xl text-slate-500 mb-8">{MOCK_WEATHER.condition}</div>
+            {getWeatherLargeIcon()}
+            <div className="text-5xl font-bold text-slate-800 mb-2">{weather.temp}°C</div>
+            <div className="text-xl text-slate-500 mb-8">{weather.condition}</div>
             
             <div className="grid grid-cols-3 gap-4 mb-8">
                <div className="bg-slate-50 p-4 rounded-xl">
                   <Droplets className="w-6 h-6 text-blue-500 mx-auto mb-2" />
                   <div className="text-sm text-gray-400">습도</div>
-                  <div className="font-bold">{MOCK_WEATHER.humidity}%</div>
+                  <div className="font-bold">{weather.humidity}%</div>
                </div>
                <div className="bg-slate-50 p-4 rounded-xl">
                   <Wind className="w-6 h-6 text-cyan-500 mx-auto mb-2" />
                   <div className="text-sm text-gray-400">바람</div>
-                  <div className="font-bold">{MOCK_WEATHER.wind}</div>
+                  <div className="font-bold">{weather.wind}</div>
                </div>
                <div className="bg-slate-50 p-4 rounded-xl">
                   <CloudRain className="w-6 h-6 text-gray-500 mx-auto mb-2" />
                   <div className="text-sm text-gray-400">미세먼지</div>
-                  <div className="font-bold text-green-600">{MOCK_WEATHER.pm25}</div>
+                  <div className={`font-bold ${weather.pm25 === '좋음' || weather.pm25 === '보통' ? 'text-green-600' : 'text-red-600'}`}>{weather.pm25}</div>
                </div>
             </div>
             
             <div className="bg-blue-50 p-4 rounded-xl text-blue-800">
-               {MOCK_WEATHER.forecast}
+               {weather.forecast}
             </div>
           </div>
         </Modal>
@@ -933,58 +1195,51 @@ export default function App() {
       {/* --- Category Manager Modal --- */}
       {isCategoryManagerOpen && (
         <Modal title="카테고리 관리" onClose={() => setIsCategoryManagerOpen(false)}>
-          <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+           <div className="space-y-4">
              <div className="flex gap-2">
                <input 
-                 id="new-cat-input"
                  type="text" 
+                 value={newCategoryInput}
+                 onChange={e => setNewCategoryInput(e.target.value)}
+                 className="flex-1 border rounded-xl p-3 focus:outline-none focus:border-blue-500"
                  placeholder="새 카테고리 이름"
-                 className="flex-1 border rounded-xl p-3 outline-none focus:border-blue-500"
-                 onKeyDown={(e) => {
-                   if(e.key === 'Enter') {
-                     const val = e.currentTarget.value.trim();
-                     if(val && !categories.includes(val)) {
-                       setCategories([...categories, val]);
-                       e.currentTarget.value = '';
-                     }
-                   }
-                 }}
                />
                <button 
-                 onClick={() => {
-                   const input = document.getElementById('new-cat-input') as HTMLInputElement;
-                   const val = input.value.trim();
-                   if(val && !categories.includes(val)) {
-                     setCategories([...categories, val]);
-                     input.value = '';
-                   }
-                 }}
-                 className="bg-blue-600 text-white px-4 rounded-xl font-bold"
+                 onClick={handleAddCategory}
+                 disabled={!newCategoryInput.trim()}
+                 className={`px-4 rounded-xl font-bold text-white transition ${
+                   newCategoryInput.trim() ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-300'
+                 }`}
                >
                  추가
                </button>
              </div>
-             <div className="grid grid-cols-2 gap-2">
+             
+             <div className="max-h-64 overflow-y-auto space-y-2 pr-2">
                {categories.map(cat => (
-                 <div key={cat} className="flex justify-between items-center bg-slate-50 p-3 rounded-xl">
-                   <span>{cat}</span>
+                 <div key={cat} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
+                   <span className="font-medium text-slate-700">{cat}</span>
                    <button 
-                     onClick={() => setCategories(categories.filter(c => c !== cat))}
-                     className="text-red-400 hover:text-red-600"
-                     disabled={categories.length <= 1}
+                     onClick={() => handleDeleteCategory(cat)}
+                     className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
+                     title="삭제"
                    >
-                     <X className="w-4 h-4" />
+                     <Trash2 className="w-4 h-4" />
                    </button>
                  </div>
                ))}
              </div>
-          </div>
+           </div>
         </Modal>
       )}
 
       {/* --- Settings Modal --- */}
       {isSettingsOpen && (
-        <Modal title="냉장고 설정" onClose={() => setIsSettingsOpen(false)}>
+        <Modal title="냉장고 설정" onClose={() => {
+           setIsSettingsOpen(false);
+           setShowResetVerify(false);
+           setResetInput('');
+        }}>
           <div className="space-y-6">
             <div>
               <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
@@ -1071,20 +1326,54 @@ export default function App() {
             </div>
             
             <div className="pt-4 border-t">
-               <button 
-                 onClick={() => {
-                   if(confirm("모든 데이터가 초기화됩니다. 계속하시겠습니까?")) {
-                     localStorage.clear();
-                     window.location.reload();
-                   }
-                 }}
-                 className="text-red-500 text-sm hover:underline"
-               >
-                 모든 데이터 초기화
-               </button>
+               {!showResetVerify ? (
+                 <button 
+                   onClick={() => setShowResetVerify(true)}
+                   className="text-red-500 text-sm hover:underline w-full text-left font-bold"
+                 >
+                   ⚠️ 모든 데이터 초기화
+                 </button>
+               ) : (
+                 <div className="bg-red-50 p-4 rounded-xl border border-red-100 space-y-3 animate-fade-in">
+                    <h4 className="font-bold text-red-700 flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4" />
+                      데이터 초기화 확인
+                    </h4>
+                    <p className="text-sm text-red-600">
+                      초기화하려면 현재 냉장고 이름 <strong>"{config.name}"</strong>을(를) 정확히 입력하세요.
+                    </p>
+                    <input 
+                      type="text" 
+                      value={resetInput}
+                      onChange={e => setResetInput(e.target.value)}
+                      className="w-full border border-red-200 rounded-lg p-2 text-sm focus:outline-none focus:border-red-500"
+                      placeholder={config.name}
+                    />
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={handleHardReset}
+                        disabled={resetInput.trim() !== config.name.trim()}
+                        className={`flex-1 py-2 rounded-lg text-sm font-bold text-white transition ${
+                          resetInput.trim() === config.name.trim() ? 'bg-red-600 hover:bg-red-700 shadow-md' : 'bg-gray-300 cursor-not-allowed'
+                        }`}
+                      >
+                        초기화 실행
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setShowResetVerify(false);
+                          setResetInput('');
+                        }}
+                        className="px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50"
+                      >
+                        취소
+                      </button>
+                    </div>
+                 </div>
+               )}
             </div>
 
-            <button onClick={() => setIsSettingsOpen(false)} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold">
+            <button onClick={() => setIsSettingsOpen(false)} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-200">
               변경사항 저장
             </button>
           </div>
