@@ -26,10 +26,11 @@ export interface FoodItem {
   category: string;
   quantity: number;
   entryDate: number; // Timestamp
+  expirationDate?: number; // Timestamp
   doorId: string;
 }
 
-export type SortMode = 'recent' | 'oldest' | 'name' | 'quantity';
+export type SortMode = 'recent' | 'oldest' | 'name' | 'quantity' | 'expiration';
 
 export interface WeatherData {
   temp: number;
@@ -55,4 +56,12 @@ export interface RecipeSuggestion {
   ingredients: RecipeIngredient[];
   steps: string[];
   warning?: string;
+}
+
+export interface BackupData {
+  config: FridgeConfig;
+  items: FoodItem[];
+  categories: string[];
+  version: number;
+  timestamp: number;
 }

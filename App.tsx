@@ -6,9 +6,10 @@ import {
   Snowflake, Sun, Search, CloudRain, Wind, Droplets,
   Volume2, AlertCircle, UserPlus, User, PackagePlus,
   Moon, ShoppingCart, ChevronDown, ChevronUp, Pencil,
-  RefreshCw, Cloud, CloudLightning
+  RefreshCw, Cloud, CloudLightning, Download, Upload,
+  CalendarDays, Hourglass, AlertTriangle
 } from 'lucide-react';
-import { FridgeConfig, DoorConfig, FoodItem, SortMode, DoorType, UserProfile, RecipeSuggestion, WeatherData } from './types';
+import { FridgeConfig, DoorConfig, FoodItem, SortMode, DoorType, UserProfile, RecipeSuggestion, WeatherData, BackupData } from './types';
 import { DEFAULT_CATEGORIES, MOCK_WEATHER } from './constants';
 import * as GeminiService from './services/geminiService';
 import * as WeatherService from './services/weatherService';
@@ -80,6 +81,7 @@ export default function App() {
   const [editQty, setEditQty] = useState(1);
   const [editCat, setEditCat] = useState('');
   const [editDoor, setEditDoor] = useState('');
+  const [editExpiry, setEditExpiry] = useState(''); // YYYY-MM-DD string
 
   // Category Management State
   const [newCategoryInput, setNewCategoryInput] = useState('');
@@ -101,12 +103,14 @@ export default function App() {
   const [newItemQty, setNewItemQty] = useState(1);
   const [newItemCat, setNewItemCat] = useState(''); // Initialized as empty
   const [newItemDoor, setNewItemDoor] = useState('');
+  const [newItemExpiry, setNewItemExpiry] = useState(''); // YYYY-MM-DD string
   const [isListening, setIsListening] = useState(false);
   const [isPredictingCat, setIsPredictingCat] = useState(false);
 
-  // Settings Reset State
+  // Settings Reset & Backup State
   const [showResetVerify, setShowResetVerify] = useState(false);
   const [resetInput, setResetInput] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Cache for category predictions to save API calls
   const predictionCache = useRef<Record<string, string>>({});
@@ -293,6 +297,31 @@ export default function App() {
     return <Sun className="w-24 h-24 text-orange-400 mx-auto mb-4" />;
   };
 
+  const getDaysUntilExpiration = (expiryDate?: number) => {
+    if (!expiryDate) return null;
+    const now = new Date();
+    // Normalize to start of day for accurate D-day calculation
+    now.setHours(0, 0, 0, 0);
+    const expiry = new Date(expiryDate);
+    expiry.setHours(0, 0, 0, 0);
+    
+    const diffTime = expiry.getTime() - now.getTime();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  };
+
+  const getExpirationColor = (days: number) => {
+    if (days < 0) return "text-red-600 font-bold";
+    if (days <= 3) return "text-orange-600 font-bold";
+    return "text-slate-500";
+  };
+
+  const getExpirationBadge = (days: number) => {
+    if (days < 0) return <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded text-xs font-bold">만료됨 ({Math.abs(days)}일 지남)</span>;
+    if (days === 0) return <span className="bg-orange-100 text-orange-600 px-2 py-0.5 rounded text-xs font-bold animate-pulse">오늘 만료</span>;
+    if (days <= 3) return <span className="bg-orange-50 text-orange-600 px-2 py-0.5 rounded text-xs font-bold">D-{days}</span>;
+    return <span className="text-slate-400 text-xs">D-{days}</span>;
+  };
+
   // Auto Category Prediction
   useEffect(() => {
     setNewItemCat('');
@@ -357,17 +386,21 @@ export default function App() {
     if (e) e.preventDefault();
     if (!newItemName || !newItemCat) return;
 
+    const expiryTimestamp = newItemExpiry ? new Date(newItemExpiry).getTime() : undefined;
+
     const item: FoodItem = {
       id: Date.now().toString() + Math.random().toString(),
       name: newItemName,
       quantity: newItemQty,
       category: newItemCat,
       doorId: newItemDoor || config.doors[0].id,
-      entryDate: Date.now()
+      entryDate: Date.now(),
+      expirationDate: expiryTimestamp
     };
     setItems(prev => [item, ...prev]);
     // Do not clear state here to prevent modal flashing/reopening perception
     setIsAddItemOpen(false);
+    setNewItemExpiry(''); // Reset expiry
   };
 
   const openEditModal = (item: FoodItem) => {
@@ -376,12 +409,15 @@ export default function App() {
     setEditQty(item.quantity);
     setEditCat(item.category);
     setEditDoor(item.doorId);
+    setEditExpiry(item.expirationDate ? new Date(item.expirationDate).toISOString().split('T')[0] : '');
     setIsEditItemOpen(true);
   };
 
   const handleUpdateItem = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingItem) return;
+    
+    const expiryTimestamp = editExpiry ? new Date(editExpiry).getTime() : undefined;
 
     setItems(prev => prev.map(item => {
       if (item.id === editingItem.id) {
@@ -390,7 +426,8 @@ export default function App() {
           name: editName,
           quantity: editQty,
           category: editCat,
-          doorId: editDoor
+          doorId: editDoor,
+          expirationDate: expiryTimestamp
         };
       }
       return item;
@@ -419,14 +456,23 @@ export default function App() {
       const parsedItems = await GeminiService.parseVoiceInput(transcript, categories);
       
       if (parsedItems.length > 0) {
-        const newItems = parsedItems.map(p => ({
-          id: Date.now().toString() + Math.random().toString(),
-          name: p.name || '알 수 없음',
-          quantity: p.quantity || 1,
-          category: p.category || categories[0],
-          doorId: newItemDoor || config.doors[0].id,
-          entryDate: Date.now()
-        }));
+        const newItems = parsedItems.map(p => {
+          let expiryTimestamp = undefined;
+          if (p.expirationDate) {
+             try {
+                expiryTimestamp = new Date(p.expirationDate).getTime();
+             } catch (e) { console.warn("Invalid date from AI", e); }
+          }
+          return {
+            id: Date.now().toString() + Math.random().toString(),
+            name: p.name || '알 수 없음',
+            quantity: p.quantity || 1,
+            category: p.category || categories[0],
+            doorId: newItemDoor || config.doors[0].id,
+            entryDate: Date.now(),
+            expirationDate: expiryTimestamp
+          };
+        });
         setItems(prev => [...newItems, ...prev]);
         setIsAddItemOpen(false);
       }
@@ -497,6 +543,12 @@ export default function App() {
         case 'oldest': return a.entryDate - b.entryDate;
         case 'recent': return b.entryDate - a.entryDate;
         case 'quantity': return b.quantity - a.quantity;
+        case 'expiration': 
+          // Items with expiry come first, sorted ASC. Items without expiry come last.
+          if (a.expirationDate && b.expirationDate) return a.expirationDate - b.expirationDate;
+          if (a.expirationDate) return -1;
+          if (b.expirationDate) return 1;
+          return 0;
         default: return 0;
       }
     });
@@ -508,6 +560,7 @@ export default function App() {
       case 'oldest': return '오래된순';
       case 'name': return '이름순';
       case 'quantity': return '수량순';
+      case 'expiration': return '소비기한순';
       default: return mode;
     }
   };
@@ -559,6 +612,62 @@ export default function App() {
     if(confirm(`'${cat}' 카테고리를 삭제하시겠습니까?`)) {
       setCategories(categories.filter(c => c !== cat));
     }
+  };
+
+  // --- Export / Import Data ---
+
+  const handleExportData = () => {
+    const backup: BackupData = {
+      config,
+      items,
+      categories,
+      version: 1,
+      timestamp: Date.now()
+    };
+    
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `smart-fridge-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+        // Simple validation
+        if (!json.config || !Array.isArray(json.items) || !Array.isArray(json.categories)) {
+          throw new Error("잘못된 백업 파일 형식입니다.");
+        }
+
+        if (confirm(`백업 파일(${new Date(json.timestamp).toLocaleDateString()} 생성)을 복원하시겠습니까?\n현재 데이터는 모두 덮어씌워집니다.`)) {
+           setConfig(json.config);
+           setItems(json.items);
+           setCategories(json.categories);
+           alert("데이터가 성공적으로 복원되었습니다.");
+           setIsSettingsOpen(false);
+        }
+      } catch (error) {
+        console.error(error);
+        alert("백업 파일을 읽는 중 오류가 발생했습니다. 올바른 JSON 파일인지 확인해주세요.");
+      }
+      // Reset input so same file can be selected again
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+    reader.readAsText(file);
   };
 
   // --- Views ---
@@ -780,11 +889,11 @@ export default function App() {
 
           <div className="flex gap-2 w-full xl:w-auto overflow-x-auto pb-1 xl:pb-0 justify-start xl:justify-end">
             <div className="flex gap-1 bg-slate-100 p-1 rounded-xl shrink-0">
-              {(['recent', 'oldest', 'name', 'quantity'] as SortMode[]).map(mode => (
+              {(['recent', 'oldest', 'name', 'quantity', 'expiration'] as SortMode[]).map(mode => (
                 <button
                   key={mode}
                   onClick={() => setSortMode(mode)}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap ${
                     sortMode === mode ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
@@ -842,6 +951,7 @@ export default function App() {
                       setNewItemCat('');
                       setNewItemQty(1);
                       setNewItemDoor(door.id);
+                      setNewItemExpiry('');
                       setIsAddItemOpen(true);
                     }}
                     className="px-4 py-2 bg-slate-800 text-white border border-slate-800 rounded-xl hover:bg-slate-700 transition shadow-sm font-bold text-sm flex items-center gap-2"
@@ -860,10 +970,12 @@ export default function App() {
                   ) : (
                     visibleItems.map(item => {
                       const restrictionWarning = checkItemRestrictions(item.name);
+                      const daysUntilExpiry = getDaysUntilExpiration(item.expirationDate);
+                      
                       return (
                         <div key={item.id} className="bg-white border border-slate-100 rounded-2xl p-3 flex justify-between items-center hover:shadow-md transition group relative">
                           <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-lg">
+                            <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-lg shrink-0">
                               {getCategoryIcon(item.category)}
                             </div>
                             <div>
@@ -878,7 +990,14 @@ export default function App() {
                                   </div>
                                 )}
                               </div>
-                              <p className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full inline-block">{item.category}</p>
+                              <div className="flex flex-wrap items-center gap-2 mt-1">
+                                <p className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full inline-block">{item.category}</p>
+                                {daysUntilExpiry !== null && (
+                                  <div className="flex items-center gap-1">
+                                     {getExpirationBadge(daysUntilExpiry)}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
 
@@ -1004,17 +1123,28 @@ export default function App() {
                 </div>
               </div>
               
-              <div>
-                 <label className="block text-sm font-medium text-gray-700 mb-1">보관 위치</label>
-                 <select
-                   value={newItemDoor}
-                   onChange={e => setNewItemDoor(e.target.value)}
-                   className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                 >
-                   {config.doors.map(d => (
-                     <option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : '냉동'})</option>
-                   ))}
-                 </select>
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">보관 위치</label>
+                    <select
+                      value={newItemDoor}
+                      onChange={e => setNewItemDoor(e.target.value)}
+                      className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                    >
+                      {config.doors.map(d => (
+                        <option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : '냉동'})</option>
+                      ))}
+                    </select>
+                 </div>
+                 <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">소비기한 (선택)</label>
+                    <input 
+                      type="date" 
+                      value={newItemExpiry}
+                      onChange={e => setNewItemExpiry(e.target.value)}
+                      className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                    />
+                 </div>
               </div>
 
               <button 
@@ -1070,17 +1200,28 @@ export default function App() {
                 </div>
               </div>
               
-              <div>
-                 <label className="block text-sm font-medium text-gray-700 mb-1">보관 위치</label>
-                 <select
-                   value={editDoor}
-                   onChange={e => setEditDoor(e.target.value)}
-                   className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                 >
-                   {config.doors.map(d => (
-                     <option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : '냉동'})</option>
-                   ))}
-                 </select>
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">보관 위치</label>
+                    <select
+                      value={editDoor}
+                      onChange={e => setEditDoor(e.target.value)}
+                      className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                    >
+                      {config.doors.map(d => (
+                        <option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : '냉동'})</option>
+                      ))}
+                    </select>
+                 </div>
+                 <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">소비기한</label>
+                    <input 
+                      type="date" 
+                      value={editExpiry}
+                      onChange={e => setEditExpiry(e.target.value)}
+                      className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                    />
+                 </div>
               </div>
 
               <button type="submit" className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-blue-700 transition">
@@ -1325,6 +1466,35 @@ export default function App() {
               </div>
             </div>
             
+            <div className="pt-4 border-t">
+               <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
+                 <Settings className="w-5 h-5" /> 데이터 관리
+               </h3>
+               <div className="flex gap-4">
+                 <button 
+                   onClick={handleExportData}
+                   className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition"
+                 >
+                   <Download className="w-5 h-5" />
+                   백업 (내보내기)
+                 </button>
+                 <button 
+                   onClick={handleImportClick}
+                   className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition"
+                 >
+                   <Upload className="w-5 h-5" />
+                   복원 (가져오기)
+                 </button>
+                 <input 
+                   type="file" 
+                   ref={fileInputRef} 
+                   onChange={handleFileChange} 
+                   accept=".json" 
+                   className="hidden" 
+                 />
+               </div>
+            </div>
+
             <div className="pt-4 border-t">
                {!showResetVerify ? (
                  <button 

@@ -44,15 +44,20 @@ export const predictCategory = async (
 export const parseVoiceInput = async (
   transcript: string,
   existingCategories: string[]
-): Promise<Partial<FoodItem>[]> => {
+): Promise<any[]> => {
   try {
     const ai = getClient();
+    const today = new Date().toISOString().split('T')[0];
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `다음 텍스트에서 음식 항목을 추출해줘: "${transcript}". 
-      각 항목을 다음 카테고리 중 하나에 매핑해줘: ${existingCategories.join(", ")}. 
-      수량이 명시되지 않았다면 기본값은 1이야.
-      JSON 형식으로만 응답해줘.`,
+      contents: `Today is ${today}. Extract food items from this text: "${transcript}". 
+      
+      For each item:
+      1. Map to one of these categories: ${existingCategories.join(", ")}.
+      2. If quantity is unspecified, default to 1.
+      3. If an expiration context is mentioned (e.g., "expires next Friday", "until tomorrow", "good for 3 days"), calculate the date and return it as "YYYY-MM-DD".
+
+      Return strictly a JSON array.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -63,6 +68,7 @@ export const parseVoiceInput = async (
               name: { type: Type.STRING },
               quantity: { type: Type.NUMBER },
               category: { type: Type.STRING },
+              expirationDate: { type: Type.STRING, description: "YYYY-MM-DD format" }
             },
             required: ["name", "quantity", "category"],
           },
