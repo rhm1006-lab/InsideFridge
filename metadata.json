@@ -1,0 +1,8 @@
+{
+  "name": "Smart Fridge Manager",
+  "description": "A smart inventory management system designed for tablet-on-fridge usage. Features voice entry, AI recipe suggestions, and customizable fridge door configurations.",
+  "requestFramePermissions": [
+    "microphone",
+    "geolocation"
+  ]
+}
