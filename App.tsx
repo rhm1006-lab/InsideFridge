@@ -7,7 +7,7 @@ import {
   Volume2, AlertCircle, UserPlus, User, PackagePlus,
   Moon, ShoppingCart, ChevronDown, ChevronUp, Pencil,
   RefreshCw, Cloud, CloudLightning, Download, Upload,
-  CalendarDays, Hourglass, AlertTriangle
+  CalendarDays, Hourglass, AlertTriangle, Bell, BellOff
 } from 'lucide-react';
 import { FridgeConfig, DoorConfig, FoodItem, SortMode, DoorType, UserProfile, RecipeSuggestion, WeatherData, BackupData } from './types';
 import { DEFAULT_CATEGORIES, MOCK_WEATHER } from './constants';
@@ -31,7 +31,7 @@ const Modal = ({ children, onClose, title }: ModalProps) => (
           <X className="w-6 h-6 text-gray-500" />
         </button>
       </div>
-      <div className="p-6 overflow-y-auto">
+      <div className="p-6 overflow-y-auto custom-scrollbar">
         {children}
       </div>
     </div>
@@ -111,6 +111,11 @@ export default function App() {
   const [showResetVerify, setShowResetVerify] = useState(false);
   const [resetInput, setResetInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Notification State
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
+    'Notification' in window ? Notification.permission : 'default'
+  );
 
   // Cache for category predictions to save API calls
   const predictionCache = useRef<Record<string, string>>({});
@@ -195,6 +200,79 @@ export default function App() {
     setIsGeneratingRecipes(false);
   };
 
+  // --- Logic Helpers ---
+  const getDaysUntilExpiration = (expiryDate?: number) => {
+    if (!expiryDate) return null;
+    const now = new Date();
+    // Normalize to start of day for accurate D-day calculation
+    now.setHours(0, 0, 0, 0);
+    const expiry = new Date(expiryDate);
+    expiry.setHours(0, 0, 0, 0);
+    
+    const diffTime = expiry.getTime() - now.getTime();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  };
+
+  // --- Notification Logic ---
+  const requestNotificationPermission = async () => {
+    if (!('Notification' in window)) {
+      alert("이 브라우저는 알림을 지원하지 않습니다.");
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+    if (permission === 'granted') {
+       new Notification("알림이 설정되었습니다.", { body: "이제 소비기한 임박 식재료 알림을 받으실 수 있습니다." });
+    }
+  };
+
+  useEffect(() => {
+    if (notificationPermission !== 'granted') return;
+
+    const checkExpirations = () => {
+       const lastSent = localStorage.getItem('last_notification_date');
+       const now = new Date();
+       const todayStr = now.toDateString();
+       
+       // Only send notifications once per day
+       if (lastSent === todayStr) return;
+       
+       const expiring = items.filter(i => {
+         if (!i.expirationDate) return false;
+         const days = getDaysUntilExpiration(i.expirationDate);
+         return days !== null && days <= 3; // Expired or <= 3 days left
+       });
+       
+       if (expiring.length > 0) {
+          const expiredCount = expiring.filter(i => (getDaysUntilExpiration(i.expirationDate!) || 0) < 0).length;
+          const soonCount = expiring.length - expiredCount;
+
+          if (expiredCount === 0 && soonCount === 0) return;
+
+          let body = "";
+           if (expiredCount > 0 && soonCount > 0) {
+               body = `소비기한 만료 ${expiredCount}개, 임박 ${soonCount}개 식재료가 있습니다.`;
+           } else if (expiredCount > 0) {
+               body = `소비기한이 지난 식재료 ${expiredCount}개가 있습니다.`;
+           } else {
+                body = `소비기한 임박 식재료 ${soonCount}개가 있습니다. 빨리 드시는 게 좋겠어요!`;
+           }
+           
+           new Notification("냉장고 알림", { body });
+           localStorage.setItem('last_notification_date', todayStr);
+       }
+    };
+    
+    // Check shortly after load and then every hour
+    const timer = setTimeout(checkExpirations, 3000); 
+    const interval = setInterval(checkExpirations, 60 * 60 * 1000);
+
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
+  }, [items, notificationPermission]);
+
   // --- Helpers for Category Prediction & Icons ---
   // ... (checkLocalHeuristics and getCategoryIcon implementation unchanged)
   const checkLocalHeuristics = (name: string): string | null => {
@@ -267,19 +345,20 @@ export default function App() {
     return '📦';
   };
 
-  const getWeatherIcon = () => {
+  const getWeatherIcon = (sizeClass: string = "w-6 h-6") => {
     const code = weather.code;
-    if (code === undefined) return <Sun className="w-6 h-6 text-orange-400" />;
+    const c = sizeClass;
+    if (code === undefined) return <Sun className={`${c} text-orange-400`} />;
     
-    if (code <= 1) return <Sun className="w-6 h-6 text-orange-400" />;
-    if (code <= 3) return <Cloud className="w-6 h-6 text-gray-400" />;
-    if (code <= 48) return <Cloud className="w-6 h-6 text-slate-300" />;
-    if (code <= 67) return <CloudRain className="w-6 h-6 text-blue-400" />;
-    if (code <= 77) return <Snowflake className="w-6 h-6 text-sky-200" />;
-    if (code <= 82) return <CloudRain className="w-6 h-6 text-blue-600" />;
-    if (code <= 86) return <Snowflake className="w-6 h-6 text-sky-300" />;
-    if (code <= 99) return <CloudLightning className="w-6 h-6 text-purple-500" />;
-    return <Sun className="w-6 h-6 text-orange-400" />;
+    if (code <= 1) return <Sun className={`${c} text-orange-400`} />;
+    if (code <= 3) return <Cloud className={`${c} text-gray-400`} />;
+    if (code <= 48) return <Cloud className={`${c} text-slate-300`} />;
+    if (code <= 67) return <CloudRain className={`${c} text-blue-400`} />;
+    if (code <= 77) return <Snowflake className={`${c} text-sky-200`} />;
+    if (code <= 82) return <CloudRain className={`${c} text-blue-600`} />;
+    if (code <= 86) return <Snowflake className={`${c} text-sky-300`} />;
+    if (code <= 99) return <CloudLightning className={`${c} text-purple-500`} />;
+    return <Sun className={`${c} text-orange-400`} />;
   };
 
   const getWeatherLargeIcon = () => {
@@ -295,18 +374,6 @@ export default function App() {
     if (code <= 86) return <Snowflake className="w-24 h-24 text-sky-300 mx-auto mb-4" />;
     if (code <= 99) return <CloudLightning className="w-24 h-24 text-purple-500 mx-auto mb-4" />;
     return <Sun className="w-24 h-24 text-orange-400 mx-auto mb-4" />;
-  };
-
-  const getDaysUntilExpiration = (expiryDate?: number) => {
-    if (!expiryDate) return null;
-    const now = new Date();
-    // Normalize to start of day for accurate D-day calculation
-    now.setHours(0, 0, 0, 0);
-    const expiry = new Date(expiryDate);
-    expiry.setHours(0, 0, 0, 0);
-    
-    const diffTime = expiry.getTime() - now.getTime();
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   };
 
   const getExpirationColor = (days: number) => {
@@ -753,7 +820,12 @@ export default function App() {
   }
 
   // Header Data
-  const dateStr = currentTime.toLocaleDateString('ko-KR', { weekday: 'long', month: 'long', day: 'numeric' });
+  const year = currentTime.getFullYear();
+  const month = currentTime.getMonth() + 1;
+  const day = currentTime.getDate();
+  const weekday = currentTime.toLocaleDateString('ko-KR', { weekday: 'long' });
+  
+  const dateStr = `${year}년 ${month}월 ${day}일 ${weekday}`;
   const timeStr = currentTime.toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   // Add Item Validation
@@ -762,39 +834,50 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col">
       {/* --- Header --- */}
-      <header className="bg-white shadow-sm px-6 py-4 flex justify-between items-center sticky top-0 z-10">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-            <Refrigerator className="text-blue-500" />
-            {config.name}
-          </h1>
-          <div className="flex items-center gap-4 text-slate-500 mt-1">
-             <span className="text-xl font-medium">{dateStr}</span>
-             <span className="w-px h-6 bg-slate-300"></span>
-             <span className="font-mono text-3xl text-slate-800 font-bold tracking-tight">{timeStr}</span>
+      <header className="bg-white border-b border-slate-200 px-8 py-6 flex justify-between items-center sticky top-0 z-20">
+        {/* Left: Time & Date */}
+        <div className="flex flex-col">
+          <div className="flex items-center gap-2 mb-1 opacity-60">
+            <Refrigerator className="w-5 h-5" />
+            <span className="font-bold text-sm tracking-wide">{config.name}</span>
+          </div>
+          <div className="text-7xl font-black text-slate-900 font-mono leading-none tracking-tighter">
+            {timeStr}
+          </div>
+          <div className="text-2xl font-bold text-slate-500 mt-2">
+            {dateStr}
           </div>
         </div>
-        
-        <div className="flex items-center gap-6">
-          {/* Weather Widget */}
+
+        {/* Right: Weather & Settings */}
+        <div className="flex items-center gap-8">
           <button 
             onClick={() => setIsWeatherOpen(true)}
-            className="flex items-center gap-3 bg-blue-50 px-4 py-2 rounded-full hover:bg-blue-100 transition group"
+            className="flex items-center gap-4 text-right group"
           >
-            <div className="bg-white p-2 rounded-full shadow-sm group-hover:scale-110 transition">
-              {getWeatherIcon()}
+            <div className="flex flex-col items-end">
+              <div className="text-5xl font-bold text-slate-800 leading-none group-hover:text-blue-600 transition">
+                {weather.temp}°
+              </div>
+              <div className="text-lg text-slate-500 font-medium flex items-center gap-1">
+                {weather.condition}
+                <span className="text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-400">
+                   {weather.pm25}
+                </span>
+              </div>
             </div>
-            <div className="text-left">
-              <div className="text-lg font-bold text-slate-700">{weather.temp}°C {weather.condition}</div>
-              <div className="text-xs text-slate-400">자세히 보기</div>
+            <div className="group-hover:scale-110 transition duration-300">
+              {getWeatherIcon("w-16 h-16")}
             </div>
           </button>
 
+          <div className="w-px h-16 bg-slate-200"></div>
+
           <button 
             onClick={() => setIsSettingsOpen(true)}
-            className="p-3 hover:bg-slate-100 rounded-full transition"
+            className="p-4 hover:bg-slate-50 rounded-2xl transition group"
           >
-            <Settings className="w-8 h-8 text-slate-600" />
+            <Settings className="w-8 h-8 text-slate-400 group-hover:text-slate-800 group-hover:rotate-45 transition duration-300" />
           </button>
         </div>
       </header>
@@ -906,7 +989,7 @@ export default function App() {
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 border border-slate-200 rounded-xl shrink-0"
             >
               <LayoutGrid className="w-4 h-4" />
-              카테고리
+              카테고리 관리
             </button>
           </div>
         </div>
@@ -1356,7 +1439,7 @@ export default function App() {
                </button>
              </div>
              
-             <div className="max-h-64 overflow-y-auto space-y-2 pr-2">
+             <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
                {categories.map(cat => (
                  <div key={cat} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
                    <span className="font-medium text-slate-700">{cat}</span>
@@ -1412,6 +1495,36 @@ export default function App() {
                   </div>
                 ))}
               </div>
+            </div>
+            
+            <div className="pt-4 border-t">
+               <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
+                 <Bell className="w-5 h-5" /> 알림 설정
+               </h3>
+               <div className="bg-slate-50 p-4 rounded-xl flex justify-between items-center">
+                  <div>
+                    <h4 className="font-bold text-slate-700">소비기한 임박 알림</h4>
+                    <p className="text-sm text-slate-500">소비기한 3일 전부터 매일 알림을 보냅니다.</p>
+                  </div>
+                  <button 
+                    onClick={requestNotificationPermission}
+                    disabled={notificationPermission === 'granted'}
+                    className={`px-4 py-2 rounded-xl font-bold transition flex items-center gap-2 ${
+                      notificationPermission === 'granted' 
+                      ? 'bg-green-100 text-green-700' 
+                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                    }`}
+                  >
+                    {notificationPermission === 'granted' ? (
+                      <><Check className="w-4 h-4" /> 알림 켜짐</>
+                    ) : (
+                      <><Bell className="w-4 h-4" /> 알림 켜기</>
+                    )}
+                  </button>
+               </div>
+               {notificationPermission === 'denied' && (
+                 <p className="text-xs text-red-500 mt-2 px-1">⚠️ 브라우저 설정에서 알림 권한이 차단되었습니다. 설정을 변경해주세요.</p>
+               )}
             </div>
 
             <div className="pt-4 border-t">
