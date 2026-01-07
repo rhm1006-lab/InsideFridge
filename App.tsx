@@ -7,7 +7,7 @@ import {
   Volume2, AlertCircle, UserPlus, User, PackagePlus,
   Moon, ShoppingCart, ChevronDown, ChevronUp, Pencil,
   RefreshCw, Cloud, CloudLightning, Download, Upload,
-  CalendarDays, Hourglass, AlertTriangle, Bell, BellOff
+  CalendarDays, Hourglass, AlertTriangle, Bell, BellOff, Youtube
 } from 'lucide-react';
 import { FridgeConfig, DoorConfig, FoodItem, SortMode, DoorType, UserProfile, RecipeSuggestion, WeatherData, BackupData } from './types';
 import { DEFAULT_CATEGORIES, MOCK_WEATHER } from './constants';
@@ -1339,13 +1339,42 @@ export default function App() {
                      <span>🕒 {selectedRecipe.timeOfDay} 메뉴</span>
                   </div>
                </div>
-               <button 
-                 onClick={() => readRecipe(selectedRecipe)}
-                 className="p-3 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition"
-                 title="레시피 읽어주기"
+               <div className="flex gap-2">
+                 <button 
+                   onClick={() => readRecipe(selectedRecipe)}
+                   className="p-3 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition"
+                   title="레시피 읽어주기"
+                 >
+                   <Volume2 className="w-6 h-6" />
+                 </button>
+                 <a 
+                   href={`https://www.youtube.com/results?search_query=${encodeURIComponent(selectedRecipe.youtubeQuery || selectedRecipe.title)}`}
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   className="p-3 bg-red-50 text-red-600 rounded-full hover:bg-red-100 transition flex items-center justify-center"
+                   title="유튜브 영상 검색"
+                 >
+                   <Youtube className="w-6 h-6" />
+                 </a>
+               </div>
+            </div>
+            
+            <div className="bg-red-50/50 p-4 rounded-xl border border-red-100 flex items-center justify-between">
+               <div className="flex items-center gap-3">
+                  <Youtube className="w-8 h-8 text-red-600" />
+                  <div>
+                    <h4 className="font-bold text-slate-800">이 요리, 영상으로 배워보세요</h4>
+                    <p className="text-sm text-slate-500">인기 유튜브 조리법 영상을 찾아드립니다.</p>
+                  </div>
+               </div>
+               <a 
+                   href={`https://www.youtube.com/results?search_query=${encodeURIComponent(selectedRecipe.youtubeQuery || selectedRecipe.title)}`}
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold text-sm transition shadow-sm"
                >
-                 <Volume2 className="w-6 h-6" />
-               </button>
+                 영상 보기
+               </a>
             </div>
 
             <div>

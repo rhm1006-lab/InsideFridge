@@ -119,9 +119,10 @@ export const getRecipeSuggestions = async (
       제한사항에 걸리는 재료가 포함된다면, 해당 가족 구성원을 위한 주의사항(warning)을 꼭 적어줘.
       
       [중요 요구사항]
-      1. 요리 초보자도 쉽게 따라 할 수 있도록 조리 순서(steps)를 아주 구체적이고 자세하게 설명해줘. (예: "양파를 썬다" 대신 "양파 껍질을 벗기고 흐르는 물에 씻은 뒤, 0.5cm 간격으로 채 썰어주세요.")
+      1. 요리 초보자도 쉽게 따라 할 수 있도록 조리 순서(steps)를 아주 구체적이고 자세하게 설명해줘.
       2. ingredients 목록을 만들 때, '냉장고 보유 재료'에 있는 것과 없는 것을 구분해야 해.
          보유 재료에 있다면 isAvailable: true, 사야 한다면 isAvailable: false로 설정해줘. (기본 양념인 소금, 설탕, 간장, 식용유, 물은 집에 있다고 가정하고 isAvailable: true로 해줘).
+      3. 'youtubeQuery' 필드에는 이 요리의 조리법을 유튜브에서 검색할 때 가장 좋은 키워드를 넣어줘. (예: "백종원 김치찌개 레시피", "간단한 계란말이 만드는 법")
 
       결과는 한국어로 작성하고 JSON 배열로 반환해줘.`,
       config: {
@@ -147,7 +148,8 @@ export const getRecipeSuggestions = async (
                 } 
               },
               steps: { type: Type.ARRAY, items: { type: Type.STRING } },
-              warning: { type: Type.STRING, description: "식이 제한 관련 주의사항이 있다면 기재, 없으면 빈 문자열" }
+              warning: { type: Type.STRING, description: "식이 제한 관련 주의사항이 있다면 기재, 없으면 빈 문자열" },
+              youtubeQuery: { type: Type.STRING, description: "Search keyword for YouTube" }
             },
           },
         },

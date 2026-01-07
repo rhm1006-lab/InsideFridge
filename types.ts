@@ -56,6 +56,7 @@ export interface RecipeSuggestion {
   ingredients: RecipeIngredient[];
   steps: string[];
   warning?: string;
+  youtubeQuery: string; // Optimization keyword for YouTube search
 }
 
 export interface BackupData {
