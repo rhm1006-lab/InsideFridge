@@ -1,9 +1,17 @@
-export type DoorType = 'fridge' | 'freezer';
+
+export type DoorType = 'fridge' | 'freezer' | 'pantry';
 
 export interface DoorConfig {
   id: string;
   name: string;
   type: DoorType;
+}
+
+export interface Fridge {
+  id: string;
+  name: string;
+  doorCount: 1 | 2 | 3 | 4;
+  doors: DoorConfig[];
 }
 
 export interface UserProfile {
@@ -13,11 +21,17 @@ export interface UserProfile {
 }
 
 export interface FridgeConfig {
-  name: string;
-  doorCount: 1 | 2 | 4;
-  doors: DoorConfig[];
+  // Global Settings
+  name: string; // Used as the "Main Family Name" or default fridge name fallback
   userProfiles: UserProfile[];
   isSetup: boolean;
+  
+  // Multi-fridge support
+  fridges: Fridge[];
+
+  // Legacy fields (optional, kept for type safety during migration if needed)
+  doorCount?: 1 | 2 | 4;
+  doors?: DoorConfig[];
 }
 
 export interface FoodItem {

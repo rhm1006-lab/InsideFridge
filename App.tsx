@@ -7,9 +7,10 @@ import {
   Volume2, AlertCircle, UserPlus, User, PackagePlus,
   Moon, ShoppingCart, ChevronDown, ChevronUp, Pencil,
   RefreshCw, Cloud, CloudLightning, Download, Upload,
-  CalendarDays, Hourglass, AlertTriangle, Bell, BellOff, Youtube
+  CalendarDays, Hourglass, AlertTriangle, Bell, BellOff, Youtube, Camera, ScanLine, GripVertical,
+  Archive, Box
 } from 'lucide-react';
-import { FridgeConfig, DoorConfig, FoodItem, SortMode, DoorType, UserProfile, RecipeSuggestion, WeatherData, BackupData } from './types';
+import { FridgeConfig, DoorConfig, FoodItem, SortMode, DoorType, UserProfile, RecipeSuggestion, WeatherData, BackupData, Fridge } from './types';
 import { DEFAULT_CATEGORIES, MOCK_WEATHER } from './constants';
 import * as GeminiService from './services/geminiService';
 import * as WeatherService from './services/weatherService';
@@ -20,10 +21,11 @@ interface ModalProps {
   children?: React.ReactNode;
   onClose: () => void;
   title: string;
+  zIndexClass?: string;
 }
 
-const Modal = ({ children, onClose, title }: ModalProps) => (
-  <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+const Modal = ({ children, onClose, title, zIndexClass = "z-50" }: ModalProps) => (
+  <div className={`fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 ${zIndexClass}`}>
     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden animate-fade-in flex flex-col">
       <div className="flex justify-between items-center p-6 border-b border-gray-100 shrink-0">
         <h2 className="text-2xl font-bold text-gray-800">{title}</h2>
@@ -44,9 +46,25 @@ export default function App() {
   // State
   const [config, setConfig] = useState<FridgeConfig>(() => {
     const saved = localStorage.getItem('fridge_config');
-    const parsed = saved ? JSON.parse(saved) : { name: '나의 스마트 냉장고', doorCount: 2, doors: [], isSetup: false };
+    let parsed: any = saved ? JSON.parse(saved) : { name: '나의 스마트 냉장고', doorCount: 2, doors: [], isSetup: false };
+    
+    // Migration Logic: Convert old single-fridge config to multi-fridge config
+    if (!parsed.fridges || parsed.fridges.length === 0) {
+      if (parsed.isSetup && parsed.doors && parsed.doors.length > 0) {
+         const mainFridge: Fridge = {
+           id: 'main-fridge-' + Date.now(),
+           name: parsed.name || '메인 냉장고',
+           doorCount: parsed.doorCount || 2,
+           doors: parsed.doors
+         };
+         parsed.fridges = [mainFridge];
+      } else {
+        parsed.fridges = [];
+      }
+    }
+    
     if (!parsed.userProfiles) parsed.userProfiles = [];
-    return parsed;
+    return parsed as FridgeConfig;
   });
 
   const [items, setItems] = useState<FoodItem[]>(() => {
@@ -62,6 +80,19 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
 
   const [sortMode, setSortMode] = useState<SortMode>('recent');
+  
+  // Selected Fridge State
+  const [selectedFridgeId, setSelectedFridgeId] = useState<string>(() => {
+    return config.fridges.length > 0 ? config.fridges[0].id : '';
+  });
+
+  // Ensure selectedFridgeId is valid if config changes
+  useEffect(() => {
+    if (config.fridges.length > 0 && !config.fridges.find(f => f.id === selectedFridgeId)) {
+      setSelectedFridgeId(config.fridges[0].id);
+    }
+  }, [config.fridges]);
+
   const [isAddItemOpen, setIsAddItemOpen] = useState(false);
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -82,6 +113,18 @@ export default function App() {
   const [editCat, setEditCat] = useState('');
   const [editDoor, setEditDoor] = useState('');
   const [editExpiry, setEditExpiry] = useState(''); // YYYY-MM-DD string
+
+  // Delete Item State (Modal)
+  const [itemToDelete, setItemToDelete] = useState<{ id: string, name: string } | null>(null);
+
+  // Delete Fridge State (Modal)
+  const [fridgeToDelete, setFridgeToDelete] = useState<string | null>(null);
+  const [deleteConfirmationInput, setDeleteConfirmationInput] = useState('');
+
+  // Add Fridge State (Inside Settings)
+  const [isAddingFridge, setIsAddingFridge] = useState(false);
+  const [newFridgeName, setNewFridgeName] = useState('');
+  const [newFridgeDoorCount, setNewFridgeDoorCount] = useState<1|2|3|4>(2);
 
   // Category Management State
   const [newCategoryInput, setNewCategoryInput] = useState('');
@@ -107,10 +150,18 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   const [isPredictingCat, setIsPredictingCat] = useState(false);
 
+  // Receipt Scan State
+  const [isAnalyzingReceipt, setIsAnalyzingReceipt] = useState(false);
+  const receiptInputRef = useRef<HTMLInputElement>(null);
+
+  // Drag and Drop State
+  const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
+
   // Settings Reset & Backup State
   const [showResetVerify, setShowResetVerify] = useState(false);
   const [resetInput, setResetInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [settingsTab, setSettingsTab] = useState<'fridges' | 'profiles' | 'data'>('fridges');
 
   // Notification State
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
@@ -119,6 +170,70 @@ export default function App() {
 
   // Cache for category predictions to save API calls
   const predictionCache = useRef<Record<string, string>>({});
+
+  // --- UI Helpers ---
+
+  const getCategoryIcon = (category: string) => {
+    if (category.includes('잎채소')) return '🥬';
+    if (category.includes('뿌리')) return '🥕';
+    if (category.includes('열매')) return '🌶️';
+    if (category.includes('버섯')) return '🍄';
+    if (category.includes('열대')) return '🍌';
+    if (category.includes('과일')) return '🍎';
+    if (category.includes('소고기')) return '🥩';
+    if (category.includes('돼지')) return '🥓';
+    if (category.includes('닭')) return '🍗';
+    if (category.includes('생선')) return '🐟';
+    if (category.includes('우유')) return '🥛';
+    if (category.includes('계란')) return '🥚';
+    if (category.includes('두부')) return '🧊';
+    if (category.includes('김치')) return '🥬';
+    if (category.includes('반찬')) return '🍱';
+    if (category.includes('소스')) return '🧂';
+    if (category.includes('음료')) return '🥤';
+    if (category.includes('빵')) return '🍞';
+    if (category.includes('냉동')) return '🧊';
+    if (category.includes('아이스크림')) return '🍦';
+    return '📦';
+  };
+
+  const getWeatherIcon = (className: string) => {
+    const code = weather.code;
+    if (code === undefined) {
+      if (weather.condition.includes('맑음')) return <Sun className={`${className} text-orange-500`} />;
+      if (weather.condition.includes('구름') || weather.condition.includes('흐림')) return <Cloud className={`${className} text-gray-400`} />;
+      if (weather.condition.includes('비')) return <CloudRain className={`${className} text-blue-400`} />;
+      if (weather.condition.includes('눈')) return <Snowflake className={`${className} text-cyan-300`} />;
+      return <Sun className={`${className} text-orange-500`} />;
+    }
+
+    if (code === 0 || code === 1) return <Sun className={`${className} text-orange-500`} />;
+    if (code <= 3) return <Cloud className={`${className} text-gray-400`} />;
+    if (code <= 48) return <Wind className={`${className} text-gray-400`} />;
+    if (code <= 67 || (code >= 80 && code <= 82)) return <CloudRain className={`${className} text-blue-400`} />;
+    if (code <= 77 || code >= 85) return <Snowflake className={`${className} text-cyan-300`} />;
+    if (code >= 95) return <CloudLightning className={`${className} text-purple-500`} />;
+    
+    return <Sun className={`${className} text-orange-500`} />;
+  };
+
+  const getWeatherLargeIcon = () => {
+     return getWeatherIcon("w-32 h-32 mx-auto mb-4 animate-bounce");
+  };
+
+  const getExpirationBadge = (days: number) => {
+    if (days < 0) {
+      return <span className="px-2 py-0.5 rounded text-xs font-bold bg-gray-800 text-white">만료됨</span>;
+    } else if (days === 0) {
+      return <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-600 animate-pulse">D-Day</span>;
+    } else if (days <= 3) {
+      return <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-600">D-{days}</span>;
+    } else if (days <= 7) {
+      return <span className="px-2 py-0.5 rounded text-xs font-bold bg-orange-100 text-orange-600">D-{days}</span>;
+    } else {
+      return <span className="px-2 py-0.5 rounded text-xs font-bold bg-green-100 text-green-600">D-{days}</span>;
+    }
+  };
 
   // Persistence
   useEffect(() => localStorage.setItem('fridge_config', JSON.stringify(config)), [config]);
@@ -131,7 +246,6 @@ export default function App() {
       const now = new Date();
       setCurrentTime(now);
       
-      // Sleep Mode Logic: Sleep between 22:00 (10 PM) and 07:00 (7 AM)
       const hour = now.getHours();
       const shouldSleep = hour >= 22 || hour < 7;
       
@@ -139,17 +253,15 @@ export default function App() {
         setIsSleepMode(true);
       } else if (!shouldSleep) {
         setIsSleepMode(false);
-        setIsManuallyAwake(false); // Reset manual awake when day starts
+        setIsManuallyAwake(false); 
       }
     }, 1000);
     return () => clearInterval(timer);
   }, [isManuallyAwake]);
 
-  // Auto-sleep timer when manually woken up during sleep hours
   useEffect(() => {
     let sleepTimer: ReturnType<typeof setTimeout>;
     if (isManuallyAwake && (currentTime.getHours() >= 22 || currentTime.getHours() < 7)) {
-       // Go back to sleep after 30 seconds of inactivity
        sleepTimer = setTimeout(() => {
          setIsManuallyAwake(false);
          setIsSleepMode(true);
@@ -169,7 +281,6 @@ export default function App() {
             setWeather(data);
           } catch (error) {
             console.error("Failed to update weather", error);
-            // Fallback to mock data is implicit since state initialized with it
           }
         },
         (error) => {
@@ -179,12 +290,104 @@ export default function App() {
     }
   }, []);
 
-  // Initial Setup of doors if empty
-  useEffect(() => {
-    if (config.isSetup && config.doors.length === 0) {
-      generateDefaultDoors(config.doorCount);
+  // --- Logic Helpers ---
+
+  const generateDefaultDoors = (count: number): DoorConfig[] => {
+    const timestamp = Date.now();
+    if (count === 1) {
+      return [{ id: 'd1-' + timestamp, name: '메인', type: 'fridge' }];
+    } else if (count === 2) {
+      return [
+        { id: 'd1-' + timestamp, name: '왼쪽 (냉장)', type: 'fridge' },
+        { id: 'd2-' + timestamp, name: '오른쪽 (냉동)', type: 'freezer' }
+      ];
+    } else if (count === 3) {
+      return [
+        { id: 'd1-' + timestamp, name: '상단', type: 'fridge' },
+        { id: 'd2-' + timestamp, name: '하단 좌 (냉동)', type: 'freezer' },
+        { id: 'd3-' + timestamp, name: '하단 우 (상온)', type: 'pantry' }
+      ];
+    } else if (count === 4) {
+      return [
+        { id: 'd1-' + timestamp, name: '상단 좌', type: 'fridge' },
+        { id: 'd2-' + timestamp, name: '상단 우', type: 'fridge' },
+        { id: 'd3-' + timestamp, name: '하단 좌', type: 'freezer' },
+        { id: 'd4-' + timestamp, name: '하단 우', type: 'freezer' }
+      ];
     }
-  }, [config.isSetup, config.doorCount]);
+    return [];
+  };
+
+  // Initial Setup Logic
+  const setupFirstFridge = (name: string, doorCount: 1|2|3|4) => {
+     const doors = generateDefaultDoors(doorCount);
+     const newFridge: Fridge = {
+        id: 'fridge-' + Date.now(),
+        name,
+        doorCount,
+        doors
+     };
+     setConfig(prev => ({ ...prev, fridges: [newFridge], isSetup: true }));
+     setSelectedFridgeId(newFridge.id);
+  };
+
+  // --- Fridge Management Logic ---
+
+  const handleStartAddFridge = () => {
+    setIsAddingFridge(true);
+    setNewFridgeName('새 냉장고');
+    setNewFridgeDoorCount(2);
+  };
+
+  const handleSubmitAddFridge = () => {
+    if (!newFridgeName.trim()) {
+      alert("냉장고 이름을 입력해주세요.");
+      return;
+    }
+    
+    const doors = generateDefaultDoors(newFridgeDoorCount);
+    const newFridge: Fridge = {
+      id: 'fridge-' + Date.now(),
+      name: newFridgeName,
+      doorCount: newFridgeDoorCount,
+      doors
+    };
+    
+    setConfig(prev => ({ ...prev, fridges: [...prev.fridges, newFridge] }));
+    if (!selectedFridgeId) setSelectedFridgeId(newFridge.id);
+    
+    // Reset state
+    setIsAddingFridge(false);
+    setNewFridgeName('');
+  };
+
+  const handleDeleteFridge = (id: string) => {
+    if (config.fridges.length <= 1) {
+      alert("최소 하나의 냉장고는 있어야 합니다.");
+      return;
+    }
+    setDeleteConfirmationInput('');
+    setFridgeToDelete(id);
+  };
+
+  const confirmDeleteFridge = () => {
+    if (!fridgeToDelete) return;
+    
+    // Filter out items in this fridge
+    const fridge = config.fridges.find(f => f.id === fridgeToDelete);
+    if (fridge) {
+      const doorIds = fridge.doors.map(d => d.id);
+      setItems(prev => prev.filter(i => !doorIds.includes(i.doorId)));
+    }
+    
+    setConfig(prev => ({ ...prev, fridges: prev.fridges.filter(f => f.id !== fridgeToDelete) }));
+    if (selectedFridgeId === fridgeToDelete) {
+      const nextFridge = config.fridges.find(f => f.id !== fridgeToDelete);
+      if (nextFridge) setSelectedFridgeId(nextFridge.id);
+    }
+    setFridgeToDelete(null);
+    setDeleteConfirmationInput('');
+  };
 
   // AI Recipes
   const fetchRecipes = async () => {
@@ -204,7 +407,6 @@ export default function App() {
   const getDaysUntilExpiration = (expiryDate?: number) => {
     if (!expiryDate) return null;
     const now = new Date();
-    // Normalize to start of day for accurate D-day calculation
     now.setHours(0, 0, 0, 0);
     const expiry = new Date(expiryDate);
     expiry.setHours(0, 0, 0, 0);
@@ -234,13 +436,12 @@ export default function App() {
        const now = new Date();
        const todayStr = now.toDateString();
        
-       // Only send notifications once per day
        if (lastSent === todayStr) return;
        
        const expiring = items.filter(i => {
          if (!i.expirationDate) return false;
          const days = getDaysUntilExpiration(i.expirationDate);
-         return days !== null && days <= 3; // Expired or <= 3 days left
+         return days !== null && days <= 3; 
        });
        
        if (expiring.length > 0) {
@@ -263,7 +464,6 @@ export default function App() {
        }
     };
     
-    // Check shortly after load and then every hour
     const timer = setTimeout(checkExpirations, 3000); 
     const interval = setInterval(checkExpirations, 60 * 60 * 1000);
 
@@ -274,106 +474,24 @@ export default function App() {
   }, [items, notificationPermission]);
 
   // --- Helpers for Category Prediction & Icons ---
-  // ... (checkLocalHeuristics and getCategoryIcon implementation unchanged)
   const checkLocalHeuristics = (name: string): string | null => {
     const n = name.replace(/\s+/g, '');
-    
-    // Complex/Longer matches first to avoid incorrect substrings
     if (n.includes('양배추')) return categories.find(c => c.includes('잎채소')) || '잎채소 (상추/깻잎 등)';
     if (n.includes('배추') || n.includes('김치') || n.includes('깍두기')) return categories.find(c => c.includes('김치')) || '김치/절임배추';
     if (n.includes('아이스크림')) return categories.find(c => c.includes('아이스크림')) || '아이스크림';
-    
-    // Root Veg
-    if (n.includes('양파') || n.includes('마늘') || n.includes('감자') || n.includes('당근') || n.includes('고구마') || n.includes('무') || n.includes('연근') || n.includes('우엉')) return categories.find(c => c.includes('뿌리채소')) || '뿌리채소 (감자/당근 등)';
-    
-    // Leaf Veg
-    if (n.includes('대파') || n.includes('쪽파') || n.includes('상추') || n.includes('깻잎') || n.includes('시금치') || n.includes('부추') || n.includes('쑥갓') || n.includes('치커리')) return categories.find(c => c.includes('잎채소')) || '잎채소 (상추/깻잎 등)';
-
-    // Fruit Veg
-    if (n.includes('고추') || n.includes('오이') || n.includes('호박') || n.includes('토마토') || n.includes('가지') || n.includes('피망') || n.includes('파프리카')) return categories.find(c => c.includes('열매채소')) || '열매채소 (고추/오이 등)';
-    
-    // Mushrooms
-    if (n.includes('버섯') || n.includes('팽이') || n.includes('표고') || n.includes('송이') || n.includes('느타리')) return categories.find(c => c.includes('버섯')) || '버섯류';
-
-    // Fruits
-    if (n.includes('사과') || n.includes('배') || n.includes('포도') || n.includes('딸기') || n.includes('바나나') || n.includes('귤') || n.includes('오렌지') || n.includes('복숭아') || n.includes('자두') || n.includes('감') || n.includes('수박') || n.includes('참외') || n.includes('키위') || n.includes('망고') || n.includes('파인애플') || n.includes('체리') || n.includes('블루베리')) {
-        if (n.includes('망고') || n.includes('파인애플') || n.includes('바나나')) return categories.find(c => c.includes('열대')) || '열대과일';
-        return categories.find(c => c.includes('과일')) || '과일 (사과/배 등)';
-    }
-
-    // Meat/Seafood
-    if (n.includes('소고기') || n.includes('한우') || n.includes('스테이크') || n.includes('차돌') || n.includes('양지')) return categories.find(c => c.includes('소고기')) || '소고기';
-    if (n.includes('돼지') || n.includes('삼겹살') || n.includes('목살') || n.includes('햄') || n.includes('소시지') || n.includes('베이컨') || n.includes('스팸')) return categories.find(c => c.includes('돼지')) || '돼지고기';
-    if (n.includes('닭') || n.includes('치킨') || n.includes('오리')) return categories.find(c => c.includes('닭')) || '닭/오리고기';
-    if (n.includes('생선') || n.includes('고등어') || n.includes('오징어') || n.includes('새우') || n.includes('갈치') || n.includes('조기') || n.includes('멸치') || n.includes('참치') || n.includes('낙지') || n.includes('문어') || n.includes('게') || n.includes('조개') || n.includes('전복')) return categories.find(c => c.includes('생선')) || '생선/해산물';
-    
-    // Dairy/Eggs/Tofu
-    if (n.includes('우유') || n.includes('치즈') || n.includes('요거트') || n.includes('버터') || n.includes('크림')) return categories.find(c => c.includes('우유')) || '우유/유제품';
-    if (n.includes('계란') || n.includes('달걀') || n.includes('메추리알')) return categories.find(c => c.includes('계란')) || '계란/알류';
-    if (n.includes('두부') || n.includes('콩나물') || n.includes('콩')) return categories.find(c => c.includes('두부')) || '두부/콩류';
-    
-    // Drinks/Snacks/Others
-    if (n.includes('물') || n.includes('주스') || n.includes('콜라') || n.includes('사이다') || n.includes('맥주') || n.includes('소주') || n.includes('커피') || n.includes('탄산')) return categories.find(c => c.includes('음료')) || '음료/주류';
-    if (n.includes('빵') || n.includes('케이크') || n.includes('샌드위치') || n.includes('떡') || n.includes('과자') || n.includes('초콜릿') || n.includes('쿠키')) return categories.find(c => c.includes('빵')) || '빵/떡/간식';
-    if (n.includes('냉동') || n.includes('만두') || n.includes('피자') || n.includes('돈까스')) return categories.find(c => c.includes('냉동 간편식')) || '냉동 간편식';
-    if (n.includes('소스') || n.includes('장') || n.includes('케첩') || n.includes('마요네즈') || n.includes('오일') || n.includes('식용유') || n.includes('간장') || n.includes('식초')) return categories.find(c => c.includes('소스')) || '소스/드레싱/양념';
-
+    if (n.includes('양파') || n.includes('마늘') || n.includes('감자') || n.includes('당근') || n.includes('고구마') || n.includes('무')) return categories.find(c => c.includes('뿌리채소')) || '뿌리채소 (감자/당근 등)';
+    if (n.includes('대파') || n.includes('쪽파') || n.includes('상추') || n.includes('깻잎') || n.includes('시금치')) return categories.find(c => c.includes('잎채소')) || '잎채소 (상추/깻잎 등)';
+    if (n.includes('고추') || n.includes('오이') || n.includes('호박') || n.includes('토마토') || n.includes('가지')) return categories.find(c => c.includes('열매채소')) || '열매채소 (고추/오이 등)';
+    if (n.includes('버섯')) return categories.find(c => c.includes('버섯')) || '버섯류';
+    if (n.includes('사과') || n.includes('배') || n.includes('포도') || n.includes('딸기') || n.includes('바나나') || n.includes('귤')) return categories.find(c => c.includes('과일')) || '과일 (사과/배 등)';
+    if (n.includes('소고기') || n.includes('한우')) return categories.find(c => c.includes('소고기')) || '소고기';
+    if (n.includes('돼지') || n.includes('삼겹살')) return categories.find(c => c.includes('돼지')) || '돼지고기';
+    if (n.includes('닭') || n.includes('치킨')) return categories.find(c => c.includes('닭')) || '닭/오리고기';
+    if (n.includes('생선') || n.includes('고등어') || n.includes('오징어')) return categories.find(c => c.includes('생선')) || '생선/해산물';
+    if (n.includes('우유') || n.includes('치즈') || n.includes('요거트')) return categories.find(c => c.includes('우유')) || '우유/유제품';
+    if (n.includes('계란') || n.includes('달걀')) return categories.find(c => c.includes('계란')) || '계란/알류';
+    if (n.includes('두부') || n.includes('콩나물')) return categories.find(c => c.includes('두부')) || '두부/콩류';
     return null;
-  };
-
-  const getCategoryIcon = (category: string) => {
-    if (category.includes('잎채소')) return '🥬';
-    if (category.includes('뿌리')) return '🥕';
-    if (category.includes('열매')) return '🥒';
-    if (category.includes('버섯')) return '🍄';
-    if (category.includes('과일')) return '🍎';
-    if (category.includes('열대')) return '🍌';
-    if (category.includes('소고기')) return '🥩';
-    if (category.includes('돼지')) return '🥓';
-    if (category.includes('닭') || category.includes('오리')) return '🍗';
-    if (category.includes('생선') || category.includes('해산물')) return '🐟';
-    if (category.includes('우유') || category.includes('유제품')) return '🥛';
-    if (category.includes('계란') || category.includes('알류')) return '🥚';
-    if (category.includes('두부') || category.includes('콩')) return '🫘';
-    if (category.includes('김치')) return '🥬';
-    if (category.includes('반찬')) return '🍱';
-    if (category.includes('소스') || category.includes('양념')) return '🥫';
-    if (category.includes('음료') || category.includes('주류')) return '🥤';
-    if (category.includes('빵') || category.includes('떡')) return '🍞';
-    if (category.includes('냉동')) return '❄️';
-    if (category.includes('아이스크림')) return '🍦';
-    return '📦';
-  };
-
-  const getWeatherIcon = (sizeClass: string = "w-6 h-6") => {
-    const code = weather.code;
-    const c = sizeClass;
-    if (code === undefined) return <Sun className={`${c} text-orange-400`} />;
-    
-    if (code <= 1) return <Sun className={`${c} text-orange-400`} />;
-    if (code <= 3) return <Cloud className={`${c} text-gray-400`} />;
-    if (code <= 48) return <Cloud className={`${c} text-slate-300`} />;
-    if (code <= 67) return <CloudRain className={`${c} text-blue-400`} />;
-    if (code <= 77) return <Snowflake className={`${c} text-sky-200`} />;
-    if (code <= 82) return <CloudRain className={`${c} text-blue-600`} />;
-    if (code <= 86) return <Snowflake className={`${c} text-sky-300`} />;
-    if (code <= 99) return <CloudLightning className={`${c} text-purple-500`} />;
-    return <Sun className={`${c} text-orange-400`} />;
-  };
-
-  const getWeatherLargeIcon = () => {
-    const code = weather.code;
-    if (code === undefined) return <Sun className="w-24 h-24 text-orange-400 mx-auto mb-4 animate-spin-slow" />;
-    
-    if (code <= 1) return <Sun className="w-24 h-24 text-orange-400 mx-auto mb-4 animate-spin-slow" />;
-    if (code <= 3) return <Cloud className="w-24 h-24 text-gray-400 mx-auto mb-4" />;
-    if (code <= 48) return <Cloud className="w-24 h-24 text-slate-300 mx-auto mb-4" />;
-    if (code <= 67) return <CloudRain className="w-24 h-24 text-blue-400 mx-auto mb-4" />;
-    if (code <= 77) return <Snowflake className="w-24 h-24 text-sky-200 mx-auto mb-4" />;
-    if (code <= 82) return <CloudRain className="w-24 h-24 text-blue-600 mx-auto mb-4" />;
-    if (code <= 86) return <Snowflake className="w-24 h-24 text-sky-300 mx-auto mb-4" />;
-    if (code <= 99) return <CloudLightning className="w-24 h-24 text-purple-500 mx-auto mb-4" />;
-    return <Sun className="w-24 h-24 text-orange-400 mx-auto mb-4" />;
   };
 
   const getExpirationColor = (days: number) => {
@@ -382,41 +500,29 @@ export default function App() {
     return "text-slate-500";
   };
 
-  const getExpirationBadge = (days: number) => {
-    if (days < 0) return <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded text-xs font-bold">만료됨 ({Math.abs(days)}일 지남)</span>;
-    if (days === 0) return <span className="bg-orange-100 text-orange-600 px-2 py-0.5 rounded text-xs font-bold animate-pulse">오늘 만료</span>;
-    if (days <= 3) return <span className="bg-orange-50 text-orange-600 px-2 py-0.5 rounded text-xs font-bold">D-{days}</span>;
-    return <span className="text-slate-400 text-xs">D-{days}</span>;
-  };
-
   // Auto Category Prediction
   useEffect(() => {
     setNewItemCat('');
-
     const trimmedName = newItemName.trim();
     if (!trimmedName) return;
 
-    // 1. Try local heuristics first to save API quota
     const localPrediction = checkLocalHeuristics(trimmedName);
     if (localPrediction) {
       setNewItemCat(localPrediction);
       return;
     }
 
-    // 2. Check Cache
     if (predictionCache.current[trimmedName]) {
       setNewItemCat(predictionCache.current[trimmedName]);
       return;
     }
     
-    // 3. Fallback to API with a longer debounce (1000ms) to prevent quota errors
     const timeout = setTimeout(async () => {
       setIsPredictingCat(true);
       try {
         const predicted = await GeminiService.predictCategory(trimmedName, categories);
         if (predicted) {
           setNewItemCat(predicted);
-          // Cache the result
           predictionCache.current[trimmedName] = predicted;
         }
       } catch (error) {
@@ -430,44 +536,33 @@ export default function App() {
   }, [newItemName, categories]);
 
 
-  // --- Logic Helpers ---
-
-  const generateDefaultDoors = (count: number) => {
-    const newDoors: DoorConfig[] = [];
-    if (count === 1) {
-      newDoors.push({ id: 'd1', name: '메인 냉장고', type: 'fridge' });
-    } else if (count === 2) {
-      newDoors.push({ id: 'd1', name: '왼쪽 냉장실', type: 'fridge' });
-      newDoors.push({ id: 'd2', name: '오른쪽 냉동실', type: 'freezer' });
-    } else if (count === 4) {
-      newDoors.push({ id: 'd1', name: '상단 왼쪽', type: 'fridge' });
-      newDoors.push({ id: 'd2', name: '상단 오른쪽', type: 'fridge' });
-      newDoors.push({ id: 'd3', name: '하단 왼쪽', type: 'freezer' });
-      newDoors.push({ id: 'd4', name: '하단 오른쪽', type: 'freezer' });
-    }
-    setConfig(prev => ({ ...prev, doors: newDoors }));
-    setNewItemDoor(newDoors[0]?.id || '');
-  };
-
   const handleAddItem = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!newItemName || !newItemCat) return;
 
     const expiryTimestamp = newItemExpiry ? new Date(newItemExpiry).getTime() : undefined;
+    
+    // Default to first door of selected fridge if not specified
+    let targetDoorId = newItemDoor;
+    if (!targetDoorId) {
+       const activeFridge = config.fridges.find(f => f.id === selectedFridgeId) || config.fridges[0];
+       if (activeFridge && activeFridge.doors.length > 0) {
+         targetDoorId = activeFridge.doors[0].id;
+       }
+    }
 
     const item: FoodItem = {
       id: Date.now().toString() + Math.random().toString(),
       name: newItemName,
       quantity: newItemQty,
       category: newItemCat,
-      doorId: newItemDoor || config.doors[0].id,
+      doorId: targetDoorId,
       entryDate: Date.now(),
       expirationDate: expiryTimestamp
     };
     setItems(prev => [item, ...prev]);
-    // Do not clear state here to prevent modal flashing/reopening perception
     setIsAddItemOpen(false);
-    setNewItemExpiry(''); // Reset expiry
+    setNewItemExpiry('');
   };
 
   const openEditModal = (item: FoodItem) => {
@@ -522,6 +617,9 @@ export default function App() {
       
       const parsedItems = await GeminiService.parseVoiceInput(transcript, categories);
       
+      const activeFridge = config.fridges.find(f => f.id === selectedFridgeId) || config.fridges[0];
+      const defaultDoorId = activeFridge?.doors[0]?.id || '';
+
       if (parsedItems.length > 0) {
         const newItems = parsedItems.map(p => {
           let expiryTimestamp = undefined;
@@ -535,7 +633,7 @@ export default function App() {
             name: p.name || '알 수 없음',
             quantity: p.quantity || 1,
             category: p.category || categories[0],
-            doorId: newItemDoor || config.doors[0].id,
+            doorId: newItemDoor || defaultDoorId,
             entryDate: Date.now(),
             expirationDate: expiryTimestamp
           };
@@ -572,19 +670,141 @@ export default function App() {
     recognition.onend = () => setIsVoiceSearching(false);
   };
 
-  const updateItemQty = (id: string, delta: number) => {
-    setItems(prev => prev.map(item => {
-      if (item.id === id) {
-        const newQty = item.quantity + delta;
-        return newQty <= 0 ? null : { ...item, quantity: newQty };
-      }
-      return item;
-    }).filter(Boolean) as FoodItem[]);
+  // --- Receipt Scan Logic ---
+  const handleReceiptClick = () => {
+    receiptInputRef.current?.click();
   };
 
-  const deleteItem = (id: string) => {
-    setItems(prev => prev.filter(i => i.id !== id));
+  const handleReceiptChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsAnalyzingReceipt(true);
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const base64String = event.target?.result as string;
+        // Remove data URL header (e.g., "data:image/jpeg;base64,")
+        const base64Data = base64String.split(',')[1];
+        
+        const parsedItems = await GeminiService.parseReceipt(base64Data, categories);
+        
+        if (parsedItems.length > 0) {
+           const activeFridge = config.fridges.find(f => f.id === selectedFridgeId) || config.fridges[0];
+           // Default to user-selected door in modal, or active fridge's first door
+           const currentDoorId = newItemDoor || activeFridge.doors[0].id;
+           
+           const newItems = parsedItems.map(p => {
+             let expiryTimestamp = undefined;
+             if (p.expirationDate) {
+                try {
+                   expiryTimestamp = new Date(p.expirationDate).getTime();
+                } catch (e) { console.warn("Invalid date from AI", e); }
+             }
+
+             // Smart Door Selection Logic within CURRENT FRIDGE
+             let finalDoorId = currentDoorId;
+             
+             if (p.storageType) {
+                // Try to find a matching door in the CURRENT fridge
+                const currentDoor = activeFridge.doors.find(d => d.id === currentDoorId);
+                
+                if (currentDoor && currentDoor.type !== p.storageType) {
+                    const betterDoor = activeFridge.doors.find(d => d.type === p.storageType);
+                    if (betterDoor) {
+                        finalDoorId = betterDoor.id;
+                    }
+                }
+             }
+
+             return {
+               id: Date.now().toString() + Math.random().toString(),
+               name: p.name || '알 수 없음',
+               quantity: p.quantity || 1,
+               category: p.category || categories[0],
+               doorId: finalDoorId,
+               entryDate: Date.now(),
+               expirationDate: expiryTimestamp
+             };
+           });
+           
+           setItems(prev => [...newItems, ...prev]);
+           setIsAddItemOpen(false);
+           
+           const uniqueDoorIds = Array.from(new Set(newItems.map(i => i.doorId)));
+           const doorNames = uniqueDoorIds.map(id => activeFridge.doors.find(d => d.id === id)?.name).join(', ');
+
+           alert(`${newItems.length}개의 품목이 '${activeFridge.name}'에 추가되었습니다.\n(저장 위치: ${doorNames})`);
+        } else {
+           alert("영수증에서 식재료를 식별하지 못했습니다.");
+        }
+      } catch (error) {
+        console.error("Receipt processing failed", error);
+        alert("영수증 처리 중 오류가 발생했습니다.");
+      } finally {
+        setIsAnalyzingReceipt(false);
+        if (receiptInputRef.current) receiptInputRef.current.value = '';
+      }
+    };
+    reader.readAsDataURL(file);
   };
+
+
+  const updateItemQty = (id: string, delta: number) => {
+    const item = items.find(i => i.id === id);
+    if (!item) return;
+
+    const newQty = item.quantity + delta;
+
+    if (newQty <= 0) {
+      setItemToDelete({ id: item.id, name: item.name });
+    } else {
+      setItems(prev => prev.map(i => i.id === id ? { ...i, quantity: newQty } : i));
+    }
+  };
+
+  const requestDeleteItem = (item: FoodItem) => {
+    setItemToDelete({ id: item.id, name: item.name });
+  };
+
+  const confirmDelete = () => {
+    if (itemToDelete) {
+      setItems(prev => prev.filter(i => i.id !== itemToDelete.id));
+      setItemToDelete(null);
+    }
+  };
+
+  const cancelDelete = () => {
+    setItemToDelete(null);
+  };
+
+  const handleDragStart = (e: React.DragEvent, itemId: string) => {
+    setDraggedItemId(itemId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", itemId);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDrop = (e: React.DragEvent, targetDoorId: string) => {
+    e.preventDefault();
+    const itemId = e.dataTransfer.getData("text/plain");
+    
+    if (itemId) {
+      setItems(prev => prev.map(item => {
+        if (item.id === itemId) {
+          return { ...item, doorId: targetDoorId };
+        }
+        return item;
+      }));
+    }
+    setDraggedItemId(null);
+  };
+
 
   const toggleDoorExpansion = (doorId: string) => {
     setExpandedDoors(prev => 
@@ -595,7 +815,6 @@ export default function App() {
   const getFilteredAndSortedItems = (doorId: string) => {
     let filtered = items.filter(i => i.doorId === doorId);
     
-    // Apply Search Query
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(item => 
@@ -611,7 +830,6 @@ export default function App() {
         case 'recent': return b.entryDate - a.entryDate;
         case 'quantity': return b.quantity - a.quantity;
         case 'expiration': 
-          // Items with expiry come first, sorted ASC. Items without expiry come last.
           if (a.expirationDate && b.expirationDate) return a.expirationDate - b.expirationDate;
           if (a.expirationDate) return -1;
           if (b.expirationDate) return 1;
@@ -715,7 +933,6 @@ export default function App() {
     reader.onload = (event) => {
       try {
         const json = JSON.parse(event.target?.result as string);
-        // Simple validation
         if (!json.config || !Array.isArray(json.items) || !Array.isArray(json.categories)) {
           throw new Error("잘못된 백업 파일 형식입니다.");
         }
@@ -731,7 +948,6 @@ export default function App() {
         console.error(error);
         alert("백업 파일을 읽는 중 오류가 발생했습니다. 올바른 JSON 파일인지 확인해주세요.");
       }
-      // Reset input so same file can be selected again
       if (fileInputRef.current) fileInputRef.current.value = '';
     };
     reader.readAsText(file);
@@ -740,6 +956,8 @@ export default function App() {
   // --- Views ---
 
   if (!config.isSetup) {
+    // Initial Setup View
+    // Using a temp state to manage the setup form before committing to config
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="bg-white max-w-2xl w-full p-8 rounded-3xl shadow-xl">
@@ -750,51 +968,48 @@ export default function App() {
           </div>
 
           <div className="space-y-6">
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-2">냉장고 이름</label>
-              <input 
-                type="text" 
-                value={config.name}
-                onChange={(e) => setConfig({...config, name: e.target.value})}
-                className="w-full border-2 border-slate-200 rounded-xl p-4 text-lg focus:border-blue-500 outline-none transition"
-                placeholder="예: 우리집 냉장고"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-2">문 개수 설정</label>
-              <div className="grid grid-cols-3 gap-4">
-                {[1, 2, 4].map(num => (
-                  <button
-                    key={num}
-                    onClick={() => {
-                      setConfig({...config, doorCount: num as 1|2|4});
-                    }}
-                    className={`p-6 rounded-xl border-2 text-xl font-bold transition-all ${
-                      config.doorCount === num 
-                      ? 'border-blue-500 bg-blue-50 text-blue-600' 
-                      : 'border-slate-200 hover:border-blue-200'
-                    }`}
-                  >
-                    {num}개
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <button
-              onClick={() => {
-                generateDefaultDoors(config.doorCount);
-                setConfig(prev => ({ ...prev, isSetup: true }));
-              }}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl text-lg shadow-lg shadow-blue-200 transition-all mt-8"
-            >
-              관리 시작하기
-            </button>
+            <SetupForm onComplete={(name, doors) => setupFirstFridge(name, doors)} />
           </div>
         </div>
       </div>
     );
+  }
+
+  // --- Derived State for Rendering ---
+  
+  // Decide which doors to show
+  // If Searching: Show doors from ALL fridges that contain matching items
+  // If Not Searching: Show doors from the SELECTED fridge
+  
+  let visibleDoors: { fridgeId: string, fridgeName: string, door: DoorConfig }[] = [];
+  
+  if (searchQuery.trim()) {
+     // Global Search Mode
+     const query = searchQuery.toLowerCase();
+     
+     config.fridges.forEach(fridge => {
+       fridge.doors.forEach(door => {
+         const hasMatchingItems = items.some(item => 
+           item.doorId === door.id && (
+             item.name.toLowerCase().includes(query) || 
+             item.category.toLowerCase().includes(query)
+           )
+         );
+         if (hasMatchingItems) {
+           visibleDoors.push({ fridgeId: fridge.id, fridgeName: fridge.name, door });
+         }
+       });
+     });
+  } else {
+     // Standard View Mode
+     const activeFridge = config.fridges.find(f => f.id === selectedFridgeId);
+     if (activeFridge) {
+       visibleDoors = activeFridge.doors.map(door => ({
+         fridgeId: activeFridge.id,
+         fridgeName: activeFridge.name,
+         door
+       }));
+     }
   }
 
   // Sleep Mode Overlay
@@ -828,7 +1043,6 @@ export default function App() {
   const dateStr = `${year}년 ${month}월 ${day}일 ${weekday}`;
   const timeStr = currentTime.toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-  // Add Item Validation
   const isAddItemValid = newItemName.trim().length > 0 && newItemCat.length > 0;
 
   return (
@@ -925,7 +1139,6 @@ export default function App() {
                          )}
                       </div>
                       <h3 className="font-bold text-lg mb-2 leading-tight">{recipe.title}</h3>
-                      {/* Description removed for compactness */}
                       <div className="flex items-center gap-2 text-xs opacity-80">
                          <span>🔥 {recipe.calories} kcal</span>
                          <span>•</span>
@@ -949,6 +1162,28 @@ export default function App() {
 
         {/* Search & Sorting & Global Controls */}
         <div className="bg-white p-3 rounded-2xl shadow-sm flex flex-col xl:flex-row gap-4 items-center">
+          
+          {/* Fridge Tabs (Left of Search) */}
+          <div className="flex gap-2 overflow-x-auto max-w-full xl:max-w-xs pb-2 xl:pb-0 shrink-0 custom-scrollbar">
+             {config.fridges.map(fridge => (
+               <button
+                 key={fridge.id}
+                 onClick={() => {
+                   setSelectedFridgeId(fridge.id);
+                   setSearchQuery(''); // Clear search when switching context
+                 }}
+                 className={`px-4 py-3 rounded-xl text-sm font-bold whitespace-nowrap transition flex items-center gap-2 ${
+                   selectedFridgeId === fridge.id && !searchQuery
+                   ? 'bg-slate-800 text-white shadow-md' 
+                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                 }`}
+               >
+                 <Refrigerator className="w-4 h-4" />
+                 {fridge.name}
+               </button>
+             ))}
+          </div>
+
           {/* Search Bar */}
           <div className="flex-1 w-full relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
@@ -956,8 +1191,10 @@ export default function App() {
               type="text" 
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="식재료 또는 카테고리 검색..."
-              className="w-full pl-10 pr-12 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-500 transition"
+              placeholder="모든 냉장고에서 식재료 검색..."
+              className={`w-full pl-10 pr-12 py-3 border rounded-xl focus:outline-none focus:border-blue-500 transition ${
+                searchQuery ? 'bg-white border-blue-500 ring-2 ring-blue-100' : 'bg-slate-50 border-slate-200'
+              }`}
             />
             <button 
               onClick={handleVoiceSearch}
@@ -995,32 +1232,56 @@ export default function App() {
         </div>
 
         {/* Fridge Grid Layout */}
-        <div className={`grid gap-6 flex-1 min-h-0 ${
-          config.doorCount === 1 ? 'grid-cols-1' :
-          config.doorCount === 2 ? 'grid-cols-2' :
-          'grid-cols-2 grid-rows-2'
+        <div className={`grid gap-6 flex-1 min-h-0 overflow-y-auto pb-6 ${
+          visibleDoors.length === 1 ? 'grid-cols-1' :
+          visibleDoors.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
+          'grid-cols-1 md:grid-cols-2 xl:grid-cols-2'
         }`}>
-          {config.doors.map((door) => {
+          {searchQuery && visibleDoors.length === 0 && (
+             <div className="col-span-full flex flex-col items-center justify-center text-slate-400 min-h-[200px]">
+                <Search className="w-16 h-16 mb-4 opacity-20" />
+                <p className="text-lg">모든 냉장고에서 검색 결과가 없습니다.</p>
+             </div>
+          )}
+
+          {visibleDoors.map(({ fridgeId, fridgeName, door }) => {
             const allItems = getFilteredAndSortedItems(door.id);
             const isExpanded = expandedDoors.includes(door.id);
-            // If searching, show all matches. If not searching, use expand logic.
             const shouldShowAll = isExpanded || searchQuery.trim().length > 0;
             const visibleItems = shouldShowAll ? allItems : allItems.slice(0, 5);
             
             return (
-              <div key={door.id} className="bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col overflow-hidden">
+              <div 
+                key={door.id} 
+                className={`bg-white rounded-3xl shadow-sm border flex flex-col overflow-hidden group/door transition-all ${
+                  searchQuery ? 'border-blue-200 shadow-md ring-1 ring-blue-50' : 'border-slate-100'
+                }`}
+                onDragOver={handleDragOver}
+                onDrop={(e) => handleDrop(e, door.id)}
+              >
                 {/* Door Header */}
-                <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                <div className={`p-4 border-b border-slate-100 transition-colors flex justify-between items-center ${
+                   draggedItemId ? 'bg-blue-50 border-blue-200' : 'bg-slate-50/50'
+                }`}>
                   <div 
                     onClick={() => toggleDoorExpansion(door.id)}
-                    className="flex items-center gap-2 cursor-pointer hover:opacity-70 transition flex-1"
+                    className="flex items-center gap-3 cursor-pointer hover:opacity-70 transition flex-1"
                   >
-                    <div className={`p-2 rounded-lg ${door.type === 'freezer' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'}`}>
-                      {door.type === 'freezer' ? <Snowflake className="w-5 h-5" /> : <Refrigerator className="w-5 h-5" />}
+                    <div className={`p-2 rounded-lg ${
+                      door.type === 'freezer' ? 'bg-blue-100 text-blue-600' : 
+                      door.type === 'pantry' ? 'bg-orange-100 text-orange-600' :
+                      'bg-green-100 text-green-600'
+                    }`}>
+                      {door.type === 'freezer' ? <Snowflake className="w-5 h-5" /> : 
+                       door.type === 'pantry' ? <Archive className="w-5 h-5" /> : 
+                       <Refrigerator className="w-5 h-5" />}
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                         <h3 className="font-bold text-slate-700">{door.name}</h3>
+                         <h3 className="font-bold text-slate-700">
+                           {searchQuery && <span className="text-xs bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded mr-1 align-middle">{fridgeName}</span>}
+                           {door.name}
+                         </h3>
                          {!searchQuery && (isExpanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />)}
                       </div>
                       <p className="text-xs text-slate-400">
@@ -1033,6 +1294,8 @@ export default function App() {
                       setNewItemName('');
                       setNewItemCat('');
                       setNewItemQty(1);
+                      // Force select the fridge this door belongs to, and select this door
+                      setSelectedFridgeId(fridgeId);
                       setNewItemDoor(door.id);
                       setNewItemExpiry('');
                       setIsAddItemOpen(true);
@@ -1044,9 +1307,9 @@ export default function App() {
                 </div>
 
                 {/* Door Content List */}
-                <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                <div className="flex-1 overflow-y-auto p-2 space-y-2 max-h-[400px]">
                   {visibleItems.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-300">
+                    <div className="h-full flex flex-col items-center justify-center text-slate-300 py-10">
                       <Search className="w-12 h-12 mb-2 opacity-20" />
                       <p>{searchQuery ? '검색 결과 없음' : '비어있음'}</p>
                     </div>
@@ -1056,8 +1319,14 @@ export default function App() {
                       const daysUntilExpiry = getDaysUntilExpiration(item.expirationDate);
                       
                       return (
-                        <div key={item.id} className="bg-white border border-slate-100 rounded-2xl p-3 flex justify-between items-center hover:shadow-md transition group relative">
+                        <div 
+                          key={item.id} 
+                          className="bg-white border border-slate-100 rounded-2xl p-3 flex justify-between items-center hover:shadow-md transition group relative cursor-grab active:cursor-grabbing"
+                          draggable={true}
+                          onDragStart={(e) => handleDragStart(e, item.id)}
+                        >
                           <div className="flex items-center gap-3">
+                            <GripVertical className="w-4 h-4 text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity" />
                             <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-lg shrink-0">
                               {getCategoryIcon(item.category)}
                             </div>
@@ -1107,7 +1376,7 @@ export default function App() {
                               <Pencil className="w-5 h-5" />
                             </button>
                             <button 
-                              onClick={() => deleteItem(item.id)}
+                              onClick={() => requestDeleteItem(item)}
                               className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
                             >
                               <Trash2 className="w-5 h-5" />
@@ -1132,25 +1401,86 @@ export default function App() {
         </div>
       </main>
 
+      {/* --- Delete Confirmation Modal (Items) --- */}
+      {itemToDelete && (
+         <Modal title="식재료 삭제 확인" onClose={cancelDelete}>
+            <div className="space-y-6">
+              <div className="bg-red-50 p-6 rounded-2xl flex flex-col items-center text-center">
+                 <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
+                    <Trash2 className="w-8 h-8" />
+                 </div>
+                 <h3 className="text-xl font-bold text-slate-800 mb-2">
+                   정말 삭제하시겠습니까?
+                 </h3>
+                 <p className="text-slate-600">
+                   <strong>'{itemToDelete.name}'</strong> 식재료가 목록에서 영구적으로 제거됩니다.
+                 </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                 <button 
+                   onClick={cancelDelete}
+                   className="py-4 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition"
+                 >
+                   취소
+                 </button>
+                 <button 
+                   onClick={confirmDelete}
+                   className="py-4 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 shadow-lg shadow-red-200 transition"
+                 >
+                   네, 삭제합니다
+                 </button>
+              </div>
+            </div>
+         </Modal>
+      )}
+
       {/* --- Add Item Modal --- */}
       {isAddItemOpen && (
         <Modal title="새로운 식재료 보관하기" onClose={() => setIsAddItemOpen(false)}>
           <div className="space-y-6">
             
-            {/* Voice Input Trigger */}
-            <div className="flex justify-center">
-              <button
-                onClick={handleVoiceAdd}
-                disabled={isListening}
-                className={`flex flex-col items-center justify-center w-32 h-32 rounded-full transition-all ${
-                  isListening 
-                  ? 'bg-red-100 text-red-600 animate-pulse border-4 border-red-200' 
-                  : 'bg-blue-50 text-blue-600 hover:bg-blue-100 border-4 border-transparent'
-                }`}
-              >
-                <Mic className={`w-10 h-10 mb-2 ${isListening ? 'animate-bounce' : ''}`} />
-                <span className="text-xs font-bold">{isListening ? '듣고 있어요...' : '터치하여 말하기'}</span>
-              </button>
+            {/* Input Triggers */}
+            <div className="grid grid-cols-2 gap-4">
+               {/* Voice Input Trigger */}
+               <button
+                 onClick={handleVoiceAdd}
+                 disabled={isListening || isAnalyzingReceipt}
+                 className={`flex flex-col items-center justify-center h-32 rounded-3xl transition-all ${
+                   isListening 
+                   ? 'bg-red-100 text-red-600 animate-pulse border-2 border-red-200' 
+                   : 'bg-blue-50 text-blue-600 hover:bg-blue-100 border-2 border-transparent'
+                 }`}
+               >
+                 <Mic className={`w-10 h-10 mb-2 ${isListening ? 'animate-bounce' : ''}`} />
+                 <span className="text-xs font-bold">{isListening ? '듣고 있어요...' : '음성으로 추가'}</span>
+               </button>
+
+               {/* Receipt Input Trigger */}
+               <button
+                 onClick={handleReceiptClick}
+                 disabled={isListening || isAnalyzingReceipt}
+                 className={`flex flex-col items-center justify-center h-32 rounded-3xl transition-all ${
+                   isAnalyzingReceipt
+                   ? 'bg-green-100 text-green-600 animate-pulse border-2 border-green-200'
+                   : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border-2 border-transparent'
+                 }`}
+               >
+                 {isAnalyzingReceipt ? (
+                   <ScanLine className="w-10 h-10 mb-2 animate-spin-slow" />
+                 ) : (
+                   <Camera className="w-10 h-10 mb-2" />
+                 )}
+                 <span className="text-xs font-bold">{isAnalyzingReceipt ? '영수증 분석 중...' : '영수증 촬영/업로드'}</span>
+               </button>
+               <input 
+                 type="file" 
+                 ref={receiptInputRef} 
+                 onChange={handleReceiptChange} 
+                 accept="image/*" 
+                 capture="environment"
+                 className="hidden" 
+               />
             </div>
             
             <div className="relative">
@@ -1167,7 +1497,6 @@ export default function App() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">식재료</label>
                 <div className="relative">
                   <input 
-                    autoFocus
                     type="text" 
                     value={newItemName}
                     onChange={e => setNewItemName(e.target.value)}
@@ -1214,8 +1543,15 @@ export default function App() {
                       onChange={e => setNewItemDoor(e.target.value)}
                       className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
                     >
-                      {config.doors.map(d => (
-                        <option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : '냉동'})</option>
+                      <option value="" disabled>위치 선택</option>
+                      {/* Show doors from the selected fridge primarily, or all fridges? 
+                          Let's show all fridges grouped by optgroup for flexibility */}
+                      {config.fridges.map(fridge => (
+                        <optgroup key={fridge.id} label={fridge.name}>
+                          {fridge.doors.map(d => (
+                            <option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : d.type === 'freezer' ? '냉동' : '상온'})</option>
+                          ))}
+                        </optgroup>
                       ))}
                     </select>
                  </div>
@@ -1291,8 +1627,12 @@ export default function App() {
                       onChange={e => setEditDoor(e.target.value)}
                       className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
                     >
-                      {config.doors.map(d => (
-                        <option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : '냉동'})</option>
+                      {config.fridges.map(fridge => (
+                        <optgroup key={fridge.id} label={fridge.name}>
+                          {fridge.doors.map(d => (
+                            <option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : d.type === 'freezer' ? '냉동' : '상온'})</option>
+                          ))}
+                        </optgroup>
                       ))}
                     </select>
                  </div>
@@ -1488,210 +1828,427 @@ export default function App() {
 
       {/* --- Settings Modal --- */}
       {isSettingsOpen && (
-        <Modal title="냉장고 설정" onClose={() => {
+        <Modal title="환경 설정" onClose={() => {
            setIsSettingsOpen(false);
+           setIsAddingFridge(false); // Reset add fridge mode
            setShowResetVerify(false);
            setResetInput('');
         }}>
-          <div className="space-y-6">
-            <div>
-              <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
-                <Refrigerator className="w-5 h-5" /> 문 설정
-              </h3>
-              <div className="space-y-3">
-                {config.doors.map(door => (
-                  <div key={door.id} className="flex gap-2 items-center">
-                    <input 
-                      type="text" 
-                      value={door.name}
-                      onChange={(e) => {
-                        const newDoors = config.doors.map(d => d.id === door.id ? {...d, name: e.target.value} : d);
-                        setConfig({...config, doors: newDoors});
-                      }}
-                      className="flex-1 border rounded-lg p-2 text-sm"
-                    />
-                    <select
-                      value={door.type}
-                      onChange={(e) => {
-                        const newDoors = config.doors.map(d => d.id === door.id ? {...d, type: e.target.value as DoorType} : d);
-                        setConfig({...config, doors: newDoors});
-                      }}
-                      className="border rounded-lg p-2 text-sm bg-white"
-                    >
-                      <option value="fridge">냉장실</option>
-                      <option value="freezer">냉동실</option>
-                    </select>
-                  </div>
-                ))}
-              </div>
-            </div>
-            
-            <div className="pt-4 border-t">
-               <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
-                 <Bell className="w-5 h-5" /> 알림 설정
-               </h3>
-               <div className="bg-slate-50 p-4 rounded-xl flex justify-between items-center">
-                  <div>
-                    <h4 className="font-bold text-slate-700">소비기한 임박 알림</h4>
-                    <p className="text-sm text-slate-500">소비기한 3일 전부터 매일 알림을 보냅니다.</p>
-                  </div>
-                  <button 
-                    onClick={requestNotificationPermission}
-                    disabled={notificationPermission === 'granted'}
-                    className={`px-4 py-2 rounded-xl font-bold transition flex items-center gap-2 ${
-                      notificationPermission === 'granted' 
-                      ? 'bg-green-100 text-green-700' 
-                      : 'bg-blue-600 text-white hover:bg-blue-700'
-                    }`}
-                  >
-                    {notificationPermission === 'granted' ? (
-                      <><Check className="w-4 h-4" /> 알림 켜짐</>
-                    ) : (
-                      <><Bell className="w-4 h-4" /> 알림 켜기</>
-                    )}
-                  </button>
-               </div>
-               {notificationPermission === 'denied' && (
-                 <p className="text-xs text-red-500 mt-2 px-1">⚠️ 브라우저 설정에서 알림 권한이 차단되었습니다. 설정을 변경해주세요.</p>
-               )}
-            </div>
+          <div className="flex border-b mb-4">
+             <button 
+                className={`px-4 py-2 font-bold ${settingsTab === 'fridges' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'}`}
+                onClick={() => setSettingsTab('fridges')}
+             >
+                냉장고 관리
+             </button>
+             <button 
+                className={`px-4 py-2 font-bold ${settingsTab === 'profiles' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'}`}
+                onClick={() => setSettingsTab('profiles')}
+             >
+                가족/알림
+             </button>
+             <button 
+                className={`px-4 py-2 font-bold ${settingsTab === 'data' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'}`}
+                onClick={() => setSettingsTab('data')}
+             >
+                데이터
+             </button>
+          </div>
 
-            <div className="pt-4 border-t">
-              <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
-                <User className="w-5 h-5" /> 가족 및 식이 제한
-              </h3>
-              <div className="space-y-4">
-                {config.userProfiles.map(profile => (
-                  <div key={profile.id} className="bg-slate-50 p-3 rounded-xl flex items-start gap-2">
-                     <div className="flex-1 space-y-2">
-                        <input 
-                          type="text" 
-                          placeholder="이름 (예: 아빠)" 
-                          value={profile.name}
-                          onChange={(e) => {
-                            const newProfiles = config.userProfiles.map(p => p.id === profile.id ? {...p, name: e.target.value} : p);
-                            setConfig({...config, userProfiles: newProfiles});
-                          }}
-                          className="w-full border rounded p-1 text-sm font-bold"
-                        />
-                        <input 
-                          type="text" 
-                          placeholder="못 먹는 음식 (예: 우유, 땅콩)" 
-                          value={profile.restrictions}
-                          onChange={(e) => {
-                            const newProfiles = config.userProfiles.map(p => p.id === profile.id ? {...p, restrictions: e.target.value} : p);
-                            setConfig({...config, userProfiles: newProfiles});
-                          }}
-                          className="w-full border rounded p-1 text-sm text-red-600 bg-red-50/50 placeholder-red-200"
-                        />
+          <div className="space-y-6">
+            
+            {/* FRIDGES TAB */}
+            {settingsTab === 'fridges' && (
+              <>
+                {!isAddingFridge ? (
+                  <div className="bg-blue-50 p-4 rounded-xl flex items-center justify-between">
+                     <div>
+                        <h4 className="font-bold text-blue-900">새 냉장고 추가</h4>
+                        <p className="text-xs text-blue-700">김치냉장고 등 서브 냉장고를 추가해보세요.</p>
                      </div>
-                     <button 
-                       onClick={() => {
-                         const newProfiles = config.userProfiles.filter(p => p.id !== profile.id);
-                         setConfig({...config, userProfiles: newProfiles});
-                       }}
-                       className="p-1 text-gray-400 hover:text-red-500"
-                     >
-                       <X className="w-4 h-4" />
+                     <button onClick={handleStartAddFridge} className="bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700">
+                        <Plus className="w-5 h-5" />
                      </button>
                   </div>
-                ))}
-                <button 
-                  onClick={() => {
-                    const newProfile: UserProfile = { id: Date.now().toString(), name: '', restrictions: '' };
-                    setConfig({...config, userProfiles: [...config.userProfiles, newProfile]});
-                  }}
-                  className="w-full py-2 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 hover:border-blue-500 hover:text-blue-500 flex items-center justify-center gap-2 font-bold"
-                >
-                  <UserPlus className="w-4 h-4" /> 가족 구성원 추가
-                </button>
-              </div>
-            </div>
-            
-            <div className="pt-4 border-t">
-               <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
-                 <Settings className="w-5 h-5" /> 데이터 관리
-               </h3>
-               <div className="flex gap-4">
-                 <button 
-                   onClick={handleExportData}
-                   className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition"
-                 >
-                   <Download className="w-5 h-5" />
-                   백업 (내보내기)
-                 </button>
-                 <button 
-                   onClick={handleImportClick}
-                   className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition"
-                 >
-                   <Upload className="w-5 h-5" />
-                   복원 (가져오기)
-                 </button>
-                 <input 
-                   type="file" 
-                   ref={fileInputRef} 
-                   onChange={handleFileChange} 
-                   accept=".json" 
-                   className="hidden" 
-                 />
-               </div>
-            </div>
+                ) : (
+                  <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-3">
+                     <h4 className="font-bold text-blue-900">냉장고 정보 입력</h4>
+                     <input 
+                       type="text" 
+                       value={newFridgeName}
+                       onChange={(e) => setNewFridgeName(e.target.value)}
+                       placeholder="예: 김치냉장고"
+                       className="w-full border rounded-lg p-2 text-sm"
+                     />
+                     <div>
+                       <label className="block text-xs font-semibold text-blue-800 mb-1">문 개수</label>
+                       <div className="flex gap-2">
+                         {[1, 2, 3, 4].map(num => (
+                           <button
+                             key={num}
+                             onClick={() => setNewFridgeDoorCount(num as any)}
+                             className={`flex-1 py-1 rounded text-sm font-bold border ${
+                               newFridgeDoorCount === num 
+                               ? 'bg-blue-600 text-white border-blue-600' 
+                               : 'bg-white text-blue-600 border-blue-200'
+                             }`}
+                           >
+                             {num}개
+                           </button>
+                         ))}
+                       </div>
+                     </div>
+                     <div className="flex gap-2 pt-2">
+                        <button onClick={() => setIsAddingFridge(false)} className="flex-1 py-2 bg-white border border-gray-300 rounded-lg text-sm text-gray-600">취소</button>
+                        <button onClick={handleSubmitAddFridge} className="flex-1 py-2 bg-blue-600 rounded-lg text-sm text-white font-bold">추가 완료</button>
+                     </div>
+                  </div>
+                )}
 
-            <div className="pt-4 border-t">
-               {!showResetVerify ? (
-                 <button 
-                   onClick={() => setShowResetVerify(true)}
-                   className="text-red-500 text-sm hover:underline w-full text-left font-bold"
-                 >
-                   ⚠️ 모든 데이터 초기화
-                 </button>
-               ) : (
-                 <div className="bg-red-50 p-4 rounded-xl border border-red-100 space-y-3 animate-fade-in">
-                    <h4 className="font-bold text-red-700 flex items-center gap-2">
-                      <AlertCircle className="w-4 h-4" />
-                      데이터 초기화 확인
-                    </h4>
-                    <p className="text-sm text-red-600">
-                      초기화하려면 현재 냉장고 이름 <strong>"{config.name}"</strong>을(를) 정확히 입력하세요.
-                    </p>
-                    <input 
-                      type="text" 
-                      value={resetInput}
-                      onChange={e => setResetInput(e.target.value)}
-                      className="w-full border border-red-200 rounded-lg p-2 text-sm focus:outline-none focus:border-red-500"
-                      placeholder={config.name}
-                    />
-                    <div className="flex gap-2">
-                      <button 
-                        onClick={handleHardReset}
-                        disabled={resetInput.trim() !== config.name.trim()}
-                        className={`flex-1 py-2 rounded-lg text-sm font-bold text-white transition ${
-                          resetInput.trim() === config.name.trim() ? 'bg-red-600 hover:bg-red-700 shadow-md' : 'bg-gray-300 cursor-not-allowed'
-                        }`}
-                      >
-                        초기화 실행
-                      </button>
-                      <button 
-                        onClick={() => {
-                          setShowResetVerify(false);
-                          setResetInput('');
-                        }}
-                        className="px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50"
-                      >
-                        취소
-                      </button>
+                <div className="space-y-4">
+                  {config.fridges.map((fridge, fIndex) => (
+                    <div key={fridge.id} className="border rounded-xl p-4">
+                       <div className="flex justify-between items-center mb-3">
+                          <input 
+                            type="text" 
+                            value={fridge.name}
+                            onChange={(e) => {
+                               const newFridges = [...config.fridges];
+                               newFridges[fIndex].name = e.target.value;
+                               setConfig({...config, fridges: newFridges});
+                            }}
+                            className="font-bold text-lg border-b border-dashed focus:outline-none focus:border-blue-500 w-full mr-2"
+                          />
+                          <button 
+                            onClick={() => handleDeleteFridge(fridge.id)}
+                            className="text-red-400 hover:text-red-600 p-1"
+                            title="냉장고 삭제"
+                          >
+                             <Trash2 className="w-5 h-5" />
+                          </button>
+                       </div>
+                       
+                       <div className="space-y-2 pl-2 border-l-2 border-slate-100">
+                          {fridge.doors.map((door, dIndex) => (
+                             <div key={door.id} className="flex gap-2 items-center">
+                                <span className="text-xs text-slate-400 w-4">{dIndex + 1}</span>
+                                <input 
+                                  type="text" 
+                                  value={door.name}
+                                  onChange={(e) => {
+                                    const newFridges = [...config.fridges];
+                                    newFridges[fIndex].doors[dIndex].name = e.target.value;
+                                    setConfig({...config, fridges: newFridges});
+                                  }}
+                                  className="flex-1 border rounded-lg p-1.5 text-sm"
+                                />
+                                <select
+                                  value={door.type}
+                                  onChange={(e) => {
+                                    const newFridges = [...config.fridges];
+                                    newFridges[fIndex].doors[dIndex].type = e.target.value as DoorType;
+                                    setConfig({...config, fridges: newFridges});
+                                  }}
+                                  className="border rounded-lg p-1.5 text-xs bg-white"
+                                >
+                                  <option value="fridge">냉장실</option>
+                                  <option value="freezer">냉동실</option>
+                                  <option value="pantry">상온/실온</option>
+                                </select>
+                             </div>
+                          ))}
+                       </div>
                     </div>
-                 </div>
-               )}
-            </div>
+                  ))}
+                </div>
+              </>
+            )}
 
-            <button onClick={() => setIsSettingsOpen(false)} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-200">
-              변경사항 저장
+            {/* PROFILES TAB */}
+            {settingsTab === 'profiles' && (
+              <>
+               <div>
+                 <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
+                   <Bell className="w-5 h-5" /> 알림 설정
+                 </h3>
+                 <div className="bg-slate-50 p-4 rounded-xl flex justify-between items-center">
+                    <div>
+                      <h4 className="font-bold text-slate-700">소비기한 임박 알림</h4>
+                      <p className="text-sm text-slate-500">소비기한 3일 전부터 매일 알림을 보냅니다.</p>
+                    </div>
+                    <button 
+                      onClick={requestNotificationPermission}
+                      disabled={notificationPermission === 'granted'}
+                      className={`px-4 py-2 rounded-xl font-bold transition flex items-center gap-2 ${
+                        notificationPermission === 'granted' 
+                        ? 'bg-green-100 text-green-700' 
+                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                      }`}
+                    >
+                      {notificationPermission === 'granted' ? (
+                        <><Check className="w-4 h-4" /> 알림 켜짐</>
+                      ) : (
+                        <><Bell className="w-4 h-4" /> 알림 켜기</>
+                      )}
+                    </button>
+                 </div>
+                 {notificationPermission === 'denied' && (
+                   <p className="text-xs text-red-500 mt-2 px-1">⚠️ 브라우저 설정에서 알림 권한이 차단되었습니다.</p>
+                 )}
+               </div>
+
+               <div className="pt-4 border-t">
+                <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
+                  <User className="w-5 h-5" /> 가족 및 식이 제한
+                </h3>
+                <div className="space-y-4">
+                  {config.userProfiles.map(profile => (
+                    <div key={profile.id} className="bg-slate-50 p-3 rounded-xl flex items-start gap-2">
+                       <div className="flex-1 space-y-2">
+                          <input 
+                            type="text" 
+                            placeholder="이름 (예: 아빠)" 
+                            value={profile.name}
+                            onChange={(e) => {
+                              const newProfiles = config.userProfiles.map(p => p.id === profile.id ? {...p, name: e.target.value} : p);
+                              setConfig({...config, userProfiles: newProfiles});
+                            }}
+                            className="w-full border rounded p-1 text-sm font-bold"
+                          />
+                          <input 
+                            type="text" 
+                            placeholder="못 먹는 음식 (예: 우유, 땅콩)" 
+                            value={profile.restrictions}
+                            onChange={(e) => {
+                              const newProfiles = config.userProfiles.map(p => p.id === profile.id ? {...p, restrictions: e.target.value} : p);
+                              setConfig({...config, userProfiles: newProfiles});
+                            }}
+                            className="w-full border rounded p-1 text-sm text-red-600 bg-red-50/50 placeholder-red-200"
+                          />
+                       </div>
+                       <button 
+                         onClick={() => {
+                           const newProfiles = config.userProfiles.filter(p => p.id !== profile.id);
+                           setConfig({...config, userProfiles: newProfiles});
+                         }}
+                         className="p-1 text-gray-400 hover:text-red-500"
+                       >
+                         <X className="w-4 h-4" />
+                       </button>
+                    </div>
+                  ))}
+                  <button 
+                    onClick={() => {
+                      const newProfile: UserProfile = { id: Date.now().toString(), name: '', restrictions: '' };
+                      setConfig({...config, userProfiles: [...config.userProfiles, newProfile]});
+                    }}
+                    className="w-full py-2 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 hover:border-blue-500 hover:text-blue-500 flex items-center justify-center gap-2 font-bold"
+                  >
+                    <UserPlus className="w-4 h-4" /> 가족 구성원 추가
+                  </button>
+                </div>
+               </div>
+              </>
+            )}
+
+            {/* DATA TAB */}
+            {settingsTab === 'data' && (
+              <>
+                 <div>
+                   <label className="block text-sm font-semibold text-slate-700 mb-2">우리집 이름 (메인 제목)</label>
+                   <input 
+                     type="text" 
+                     value={config.name}
+                     onChange={(e) => setConfig({...config, name: e.target.value})}
+                     className="w-full border rounded-xl p-3 focus:border-blue-500 outline-none"
+                   />
+                 </div>
+
+                 <div className="flex gap-4 pt-4 border-t">
+                   <button 
+                     onClick={handleExportData}
+                     className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition"
+                   >
+                     <Download className="w-5 h-5" />
+                     백업 (내보내기)
+                   </button>
+                   <button 
+                     onClick={handleImportClick}
+                     className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition"
+                   >
+                     <Upload className="w-5 h-5" />
+                     복원 (가져오기)
+                   </button>
+                   <input 
+                     type="file" 
+                     ref={fileInputRef} 
+                     onChange={handleFileChange} 
+                     accept=".json" 
+                     className="hidden" 
+                   />
+                 </div>
+
+                 <div className="pt-4 border-t">
+                   {!showResetVerify ? (
+                     <button 
+                       onClick={() => setShowResetVerify(true)}
+                       className="text-red-500 text-sm hover:underline w-full text-left font-bold"
+                     >
+                       ⚠️ 모든 데이터 초기화
+                     </button>
+                   ) : (
+                     <div className="bg-red-50 p-4 rounded-xl border border-red-100 space-y-3 animate-fade-in">
+                        <h4 className="font-bold text-red-700 flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4" />
+                          데이터 초기화 확인
+                        </h4>
+                        <p className="text-sm text-red-600">
+                          초기화하려면 현재 우리집 이름 <strong>"{config.name}"</strong>을(를) 정확히 입력하세요.
+                        </p>
+                        <input 
+                          type="text" 
+                          value={resetInput}
+                          onChange={e => setResetInput(e.target.value)}
+                          className="w-full border border-red-200 rounded-lg p-2 text-sm focus:outline-none focus:border-red-500"
+                          placeholder={config.name}
+                        />
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={handleHardReset}
+                            disabled={resetInput.trim() !== config.name.trim()}
+                            className={`flex-1 py-2 rounded-lg text-sm font-bold text-white transition ${
+                              resetInput.trim() === config.name.trim() ? 'bg-red-600 hover:bg-red-700 shadow-md' : 'bg-gray-300 cursor-not-allowed'
+                            }`}
+                          >
+                            초기화 실행
+                          </button>
+                          <button 
+                            onClick={() => {
+                              setShowResetVerify(false);
+                              setResetInput('');
+                            }}
+                            className="px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50"
+                          >
+                            취소
+                          </button>
+                        </div>
+                     </div>
+                   )}
+                </div>
+              </>
+            )}
+
+            <button onClick={() => setIsSettingsOpen(false)} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-200 mt-4">
+              닫기
             </button>
           </div>
         </Modal>
       )}
 
+      {/* --- Delete Fridge Modal (Moved to bottom for stacking context) --- */}
+      {fridgeToDelete && (
+         <Modal title="냉장고 삭제 확인" onClose={() => setFridgeToDelete(null)} zIndexClass="z-[60]">
+            <div className="space-y-6">
+              <div className="bg-red-50 p-6 rounded-2xl flex flex-col items-center text-center">
+                 <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
+                    <Trash2 className="w-8 h-8" />
+                 </div>
+                 <h3 className="text-xl font-bold text-slate-800 mb-2">
+                   정말 삭제하시겠습니까?
+                 </h3>
+                 <p className="text-slate-600 text-sm mb-4">
+                   선택한 냉장고와 <strong>보관된 모든 식재료</strong>가 영구적으로 삭제됩니다.<br/>
+                   삭제하려면 냉장고 이름을 입력하세요.
+                 </p>
+                 
+                 <div className="w-full bg-white p-3 rounded-xl border border-red-200">
+                    <p className="text-xs text-slate-500 mb-1">삭제할 냉장고 이름</p>
+                    <p className="font-bold text-slate-800 mb-2">
+                      {config.fridges.find(f => f.id === fridgeToDelete)?.name}
+                    </p>
+                    <input 
+                      type="text" 
+                      value={deleteConfirmationInput}
+                      onChange={(e) => setDeleteConfirmationInput(e.target.value)}
+                      placeholder="냉장고 이름을 정확히 입력"
+                      className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:outline-none focus:border-red-500 text-center"
+                    />
+                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                 <button 
+                   onClick={() => setFridgeToDelete(null)}
+                   className="py-4 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition"
+                 >
+                   취소
+                 </button>
+                 <button 
+                   onClick={confirmDeleteFridge}
+                   disabled={deleteConfirmationInput.trim() !== config.fridges.find(f => f.id === fridgeToDelete)?.name.trim()}
+                   className={`py-4 rounded-xl font-bold text-white transition shadow-lg ${
+                     deleteConfirmationInput.trim() === config.fridges.find(f => f.id === fridgeToDelete)?.name.trim()
+                     ? 'bg-red-600 hover:bg-red-700 shadow-red-200'
+                     : 'bg-gray-300 cursor-not-allowed shadow-none'
+                   }`}
+                 >
+                   삭제하기
+                 </button>
+              </div>
+            </div>
+         </Modal>
+      )}
+
     </div>
   );
+}
+
+// --- Subcomponent: Initial Setup Form ---
+function SetupForm({ onComplete }: { onComplete: (name: string, doorCount: 1|2|3|4) => void }) {
+  const [name, setName] = useState('');
+  const [doorCount, setDoorCount] = useState<1|2|3|4>(2);
+
+  return (
+    <>
+      <div>
+        <label className="block text-sm font-semibold text-slate-700 mb-2">첫번째 냉장고 이름</label>
+        <input 
+          type="text" 
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-full border-2 border-slate-200 rounded-xl p-4 text-lg focus:border-blue-500 outline-none transition"
+          placeholder="예: 주방 냉장고"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-semibold text-slate-700 mb-2">문 개수</label>
+        <div className="grid grid-cols-4 gap-2">
+          {[1, 2, 3, 4].map(num => (
+            <button
+              key={num}
+              onClick={() => setDoorCount(num as 1|2|3|4)}
+              className={`p-4 rounded-xl border-2 text-xl font-bold transition-all ${
+                doorCount === num 
+                ? 'border-blue-500 bg-blue-50 text-blue-600' 
+                : 'border-slate-200 hover:border-blue-200'
+              }`}
+            >
+              {num}개
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <button
+        onClick={() => {
+           if(name.trim()) onComplete(name, doorCount);
+           else alert("냉장고 이름을 입력해주세요.");
+        }}
+        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl text-lg shadow-lg shadow-blue-200 transition-all mt-8"
+      >
+        시작하기
+      </button>
+    </>
+  )
 }

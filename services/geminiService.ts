@@ -90,6 +90,73 @@ export const parseVoiceInput = async (
 };
 
 /**
+ * Parses a receipt image to extract food items.
+ */
+export const parseReceipt = async (
+  base64Image: string,
+  existingCategories: string[]
+): Promise<any[]> => {
+  try {
+    const ai = getClient();
+    const today = new Date().toISOString().split('T')[0];
+
+    const prompt = `Analyze this receipt image. 
+    Today's date is ${today}.
+    
+    [Instructions]
+    1. Extract ONLY "edible FOOD items". 
+       - EXCLUDE non-food items like toilet paper, napkins, detergent, plastic bags, dishes, etc.
+       - EXCLUDE discounts or tax lines.
+    2. For each food item:
+       - Extract the name (fix OCR errors if obvious).
+       - Extract quantity (default to 1 if not found).
+       - Map to one of these categories: [${existingCategories.join(", ")}].
+       - Suggest an Expiration Date (expirationDate) in "YYYY-MM-DD" format based on the food type (Fresh food gets shorter expiry).
+       - Determine the 'storageType': Return 'freezer' if it is frozen food (ice cream, frozen dumplings, frozen meat). Return 'fridge' for everything else.
+    
+    Return strictly a JSON array.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: {
+        parts: [
+          { inlineData: { mimeType: "image/jpeg", data: base64Image } },
+          { text: prompt }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              quantity: { type: Type.NUMBER },
+              category: { type: Type.STRING },
+              expirationDate: { type: Type.STRING, description: "YYYY-MM-DD format" },
+              storageType: { type: Type.STRING, enum: ['fridge', 'freezer'], description: "Recommended storage location" }
+            },
+            required: ["name", "quantity", "category", "storageType"],
+          },
+        },
+      },
+    });
+
+    const text = response.text;
+    if (!text) return [];
+    return JSON.parse(text);
+  } catch (error: any) {
+    if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota')) {
+       console.warn("Gemini API quota exceeded for receipt parsing.");
+       return [];
+    }
+    console.error("Gemini receipt parse error:", error);
+    return [];
+  }
+};
+
+/**
  * Suggests detailed recipes based on inventory, time, and dietary restrictions.
  */
 export const getRecipeSuggestions = async (
