@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Settings, Plus, Trash2, Mic, ChefHat, 
@@ -8,7 +9,7 @@ import {
   Moon, ShoppingCart, ChevronDown, ChevronUp, Pencil,
   RefreshCw, Cloud, CloudLightning, Download, Upload,
   CalendarDays, Hourglass, AlertTriangle, Bell, BellOff, Youtube, Camera, ScanLine, GripVertical,
-  Archive, Box
+  Archive, Box, MoveHorizontal, ChevronsLeft, ChevronsRight, CheckSquare, Square
 } from 'lucide-react';
 import { FridgeConfig, DoorConfig, FoodItem, SortMode, DoorType, UserProfile, RecipeSuggestion, WeatherData, BackupData, Fridge } from './types';
 import { DEFAULT_CATEGORIES, MOCK_WEATHER } from './constants';
@@ -22,18 +23,19 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   zIndexClass?: string;
+  maxWidthClass?: string;
 }
 
-const Modal = ({ children, onClose, title, zIndexClass = "z-50" }: ModalProps) => (
+const Modal = ({ children, onClose, title, zIndexClass = "z-50", maxWidthClass = "max-w-lg" }: ModalProps) => (
   <div className={`fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 ${zIndexClass}`}>
-    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden animate-fade-in flex flex-col">
+    <div className={`bg-white rounded-2xl shadow-2xl w-full ${maxWidthClass} max-h-[90vh] overflow-hidden animate-fade-in flex flex-col`}>
       <div className="flex justify-between items-center p-6 border-b border-gray-100 shrink-0">
         <h2 className="text-2xl font-bold text-gray-800">{title}</h2>
         <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full">
           <X className="w-6 h-6 text-gray-500" />
         </button>
       </div>
-      <div className="p-6 overflow-y-auto custom-scrollbar">
+      <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
         {children}
       </div>
     </div>
@@ -167,6 +169,14 @@ export default function App() {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
     'Notification' in window ? Notification.permission : 'default'
   );
+
+  // Move Items Modal State
+  const [isMoveItemsModalOpen, setIsMoveItemsModalOpen] = useState(false);
+  const [moveSourceFridgeId, setMoveSourceFridgeId] = useState('');
+  const [moveTargetFridgeId, setMoveTargetFridgeId] = useState('');
+  const [moveSearchQuery, setMoveSearchQuery] = useState('');
+  const [checkedSourceItems, setCheckedSourceItems] = useState<Set<string>>(new Set());
+  const [checkedTargetItems, setCheckedTargetItems] = useState<Set<string>>(new Set());
 
   // Cache for category predictions to save API calls
   const predictionCache = useRef<Record<string, string>>({});
@@ -899,6 +909,81 @@ export default function App() {
     }
   };
 
+  // --- Move Items Modal Logic ---
+  const handleOpenMoveModal = () => {
+    if (config.fridges.length < 2) return;
+    setMoveSourceFridgeId(config.fridges[0].id);
+    setMoveTargetFridgeId(config.fridges[1].id);
+    setMoveSearchQuery('');
+    setCheckedSourceItems(new Set());
+    setCheckedTargetItems(new Set());
+    setIsMoveItemsModalOpen(true);
+  };
+
+  const toggleItemSelection = (id: string, isSource: boolean) => {
+    if (isSource) {
+      setCheckedSourceItems(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    } else {
+      setCheckedTargetItems(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    }
+  };
+
+  const handleMoveItems = (direction: 'toRight' | 'toLeft') => {
+    const targetFridgeId = direction === 'toRight' ? moveTargetFridgeId : moveSourceFridgeId;
+    const sourceItemIds = direction === 'toRight' ? checkedSourceItems : checkedTargetItems;
+    
+    if (sourceItemIds.size === 0) return;
+
+    const targetFridge = config.fridges.find(f => f.id === targetFridgeId);
+    if (!targetFridge || targetFridge.doors.length === 0) return;
+
+    setItems(prev => prev.map(item => {
+      if (sourceItemIds.has(item.id)) {
+        // Smart Door Matching Logic
+        // 1. Find the current door to know its type
+        const currentDoor = config.fridges.flatMap(f => f.doors).find(d => d.id === item.doorId);
+        const idealType = currentDoor?.type || 'fridge';
+
+        // 2. Find a matching door type in the target fridge
+        let targetDoor = targetFridge.doors.find(d => d.type === idealType);
+        
+        // 3. Fallback to the first door if no matching type found
+        if (!targetDoor) targetDoor = targetFridge.doors[0];
+
+        return { ...item, doorId: targetDoor.id };
+      }
+      return item;
+    }));
+
+    // Clear selection after move
+    if (direction === 'toRight') setCheckedSourceItems(new Set());
+    else setCheckedTargetItems(new Set());
+  };
+
+  const getMoveModalGridItems = (fridgeId: string) => {
+     const fridge = config.fridges.find(f => f.id === fridgeId);
+     if (!fridge) return [];
+     
+     const doorIds = fridge.doors.map(d => d.id);
+     let fridgeItems = items.filter(i => doorIds.includes(i.doorId));
+
+     if (moveSearchQuery.trim()) {
+       fridgeItems = fridgeItems.filter(i => i.name.toLowerCase().includes(moveSearchQuery.toLowerCase()));
+     }
+     
+     return fridgeItems;
+  };
+
   // --- Export / Import Data ---
 
   const handleExportData = () => {
@@ -1226,8 +1311,17 @@ export default function App() {
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 border border-slate-200 rounded-xl shrink-0"
             >
               <LayoutGrid className="w-4 h-4" />
-              카테고리 관리
+              카테고리관리
             </button>
+            {config.fridges.length >= 2 && (
+              <button 
+                onClick={handleOpenMoveModal}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-slate-800 hover:bg-slate-700 border border-slate-800 rounded-xl shrink-0 shadow-sm transition"
+              >
+                <MoveHorizontal className="w-4 h-4" />
+                냉장고물건이동
+              </button>
+            )}
           </div>
         </div>
 
@@ -1400,6 +1494,170 @@ export default function App() {
           })}
         </div>
       </main>
+
+      {/* --- Move Items Modal --- */}
+      {isMoveItemsModalOpen && (
+        <Modal 
+          title="냉장고 물건 이동" 
+          onClose={() => setIsMoveItemsModalOpen(false)} 
+          maxWidthClass="max-w-6xl"
+        >
+          <div className="flex flex-col h-[70vh]">
+             {/* Search */}
+             <div className="mb-4 relative shrink-0">
+               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+               <input 
+                 type="text" 
+                 placeholder="물건 검색..." 
+                 value={moveSearchQuery}
+                 onChange={(e) => setMoveSearchQuery(e.target.value)}
+                 className="w-full pl-9 p-3 bg-slate-50 rounded-xl border-none focus:ring-2 focus:ring-blue-100 outline-none"
+               />
+             </div>
+
+             <div className="flex flex-1 gap-4 min-h-0">
+               {/* Left Panel: Source */}
+               <div className="flex-1 flex flex-col bg-slate-50 rounded-2xl p-4 border border-slate-200">
+                  <select 
+                    value={moveSourceFridgeId}
+                    onChange={(e) => {
+                       const id = e.target.value;
+                       setMoveSourceFridgeId(id);
+                       // If source same as target, switch target
+                       if (id === moveTargetFridgeId) {
+                         const next = config.fridges.find(f => f.id !== id)?.id;
+                         if (next) setMoveTargetFridgeId(next);
+                       }
+                    }}
+                    className="w-full p-2 mb-4 rounded-lg border font-bold text-lg"
+                  >
+                    {config.fridges.map(f => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+
+                  <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                     <table className="w-full text-sm text-left">
+                       <thead className="text-xs text-slate-500 uppercase bg-slate-100 sticky top-0">
+                         <tr>
+                           <th className="p-2 rounded-tl-lg">선택</th>
+                           <th className="p-2">번호</th>
+                           <th className="p-2">품목명</th>
+                           <th className="p-2">개수</th>
+                           <th className="p-2 rounded-tr-lg">소비기한</th>
+                         </tr>
+                       </thead>
+                       <tbody className="divide-y divide-slate-100">
+                         {getMoveModalGridItems(moveSourceFridgeId).map((item, idx) => (
+                           <tr key={item.id} className="hover:bg-white transition cursor-pointer" onClick={() => toggleItemSelection(item.id, true)}>
+                             <td className="p-2">
+                               <div className={`w-5 h-5 border rounded flex items-center justify-center ${checkedSourceItems.has(item.id) ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-slate-300'}`}>
+                                 {checkedSourceItems.has(item.id) && <Check className="w-3 h-3" />}
+                               </div>
+                             </td>
+                             <td className="p-2 text-slate-400">{idx + 1}</td>
+                             <td className="p-2 font-medium">{item.name}</td>
+                             <td className="p-2">{item.quantity}</td>
+                             <td className="p-2 text-xs text-slate-500">
+                               {item.expirationDate ? new Date(item.expirationDate).toLocaleDateString() : '-'}
+                             </td>
+                           </tr>
+                         ))}
+                         {getMoveModalGridItems(moveSourceFridgeId).length === 0 && (
+                           <tr><td colSpan={5} className="p-4 text-center text-slate-400">물건이 없습니다.</td></tr>
+                         )}
+                       </tbody>
+                     </table>
+                  </div>
+               </div>
+
+               {/* Center Controls */}
+               <div className="flex flex-col justify-center gap-4 shrink-0">
+                  <button 
+                    onClick={() => handleMoveItems('toRight')}
+                    disabled={checkedSourceItems.size === 0}
+                    className={`p-4 rounded-full transition shadow-md flex items-center justify-center ${
+                      checkedSourceItems.size > 0 
+                      ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    }`}
+                  >
+                    <ChevronsRight className="w-6 h-6" />
+                  </button>
+                  <button 
+                    onClick={() => handleMoveItems('toLeft')}
+                    disabled={checkedTargetItems.size === 0}
+                    className={`p-4 rounded-full transition shadow-md flex items-center justify-center ${
+                      checkedTargetItems.size > 0 
+                      ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    }`}
+                  >
+                    <ChevronsLeft className="w-6 h-6" />
+                  </button>
+               </div>
+
+               {/* Right Panel: Target */}
+               <div className="flex-1 flex flex-col bg-slate-50 rounded-2xl p-4 border border-slate-200">
+                  <select 
+                    value={moveTargetFridgeId}
+                    onChange={(e) => setMoveTargetFridgeId(e.target.value)}
+                    className="w-full p-2 mb-4 rounded-lg border font-bold text-lg"
+                  >
+                    {config.fridges
+                      .filter(f => f.id !== moveSourceFridgeId)
+                      .map(f => (
+                        <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+
+                  <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                     <table className="w-full text-sm text-left">
+                       <thead className="text-xs text-slate-500 uppercase bg-slate-100 sticky top-0">
+                         <tr>
+                           <th className="p-2 rounded-tl-lg">선택</th>
+                           <th className="p-2">번호</th>
+                           <th className="p-2">품목명</th>
+                           <th className="p-2">개수</th>
+                           <th className="p-2 rounded-tr-lg">소비기한</th>
+                         </tr>
+                       </thead>
+                       <tbody className="divide-y divide-slate-100">
+                         {getMoveModalGridItems(moveTargetFridgeId).map((item, idx) => (
+                           <tr key={item.id} className="hover:bg-white transition cursor-pointer" onClick={() => toggleItemSelection(item.id, false)}>
+                             <td className="p-2">
+                               <div className={`w-5 h-5 border rounded flex items-center justify-center ${checkedTargetItems.has(item.id) ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-slate-300'}`}>
+                                 {checkedTargetItems.has(item.id) && <Check className="w-3 h-3" />}
+                               </div>
+                             </td>
+                             <td className="p-2 text-slate-400">{idx + 1}</td>
+                             <td className="p-2 font-medium">{item.name}</td>
+                             <td className="p-2">{item.quantity}</td>
+                             <td className="p-2 text-xs text-slate-500">
+                               {item.expirationDate ? new Date(item.expirationDate).toLocaleDateString() : '-'}
+                             </td>
+                           </tr>
+                         ))}
+                         {getMoveModalGridItems(moveTargetFridgeId).length === 0 && (
+                           <tr><td colSpan={5} className="p-4 text-center text-slate-400">물건이 없습니다.</td></tr>
+                         )}
+                       </tbody>
+                     </table>
+                  </div>
+               </div>
+             </div>
+
+             <div className="mt-4 flex justify-end shrink-0">
+               <button 
+                 onClick={() => setIsMoveItemsModalOpen(false)}
+                 className="px-6 py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-700 transition"
+               >
+                 닫기
+               </button>
+             </div>
+          </div>
+        </Modal>
+      )}
 
       {/* --- Delete Confirmation Modal (Items) --- */}
       {itemToDelete && (
