@@ -1,46 +1,28 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Settings, Plus, Trash2, Mic, ChefHat, 
-  Thermometer, Calendar, LayoutGrid, Refrigerator,
-  ArrowUpAZ, Clock, Edit2, X, Check, Save,
+  Plus, Trash2, Mic, Refrigerator,
+  Clock, Edit2, X, Check, Save,
   Snowflake, Sun, Search, CloudRain, Wind, Droplets,
   Volume2, AlertCircle, UserPlus, User, PackagePlus,
   Moon, ShoppingCart, ChevronDown, ChevronUp, Pencil,
   RefreshCw, Cloud, CloudLightning, Download, Upload,
   CalendarDays, Hourglass, AlertTriangle, Bell, BellOff, Youtube, Camera, ScanLine, GripVertical,
-  Archive, Box, MoveHorizontal, ChevronsLeft, ChevronsRight, CheckSquare, Square
+  Archive, Box, MoveHorizontal, ChevronsLeft, ChevronsRight, CheckSquare, Square, MapPin, Merge, ArrowRight
 } from 'lucide-react';
 import { FridgeConfig, DoorConfig, FoodItem, SortMode, DoorType, UserProfile, RecipeSuggestion, WeatherData, BackupData, Fridge } from './types';
 import { DEFAULT_CATEGORIES, MOCK_WEATHER } from './constants';
 import * as GeminiService from './services/geminiService';
 import * as WeatherService from './services/weatherService';
+import { getDaysUntilExpiration, predictCategoryLocally } from './utils/displayHelpers';
 
-// --- Helper Components ---
-
-interface ModalProps {
-  children?: React.ReactNode;
-  onClose: () => void;
-  title: string;
-  zIndexClass?: string;
-  maxWidthClass?: string;
-}
-
-const Modal = ({ children, onClose, title, zIndexClass = "z-50", maxWidthClass = "max-w-lg" }: ModalProps) => (
-  <div className={`fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 ${zIndexClass}`}>
-    <div className={`bg-white rounded-2xl shadow-2xl w-full ${maxWidthClass} max-h-[90vh] overflow-hidden animate-fade-in flex flex-col`}>
-      <div className="flex justify-between items-center p-6 border-b border-gray-100 shrink-0">
-        <h2 className="text-2xl font-bold text-gray-800">{title}</h2>
-        <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full">
-          <X className="w-6 h-6 text-gray-500" />
-        </button>
-      </div>
-      <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
-        {children}
-      </div>
-    </div>
-  </div>
-);
+// Divided Components
+import { Modal } from './components/Modal';
+import { FlipDigit } from './components/FlipDigit';
+import { Header } from './components/Header';
+import { AIChefRecommendations } from './components/AIChefRecommendations';
+import { FridgeControls } from './components/FridgeControls';
+import { FridgeGrid } from './components/FridgeGrid';
 
 // --- Main Application ---
 
@@ -178,72 +160,23 @@ export default function App() {
   const [checkedSourceItems, setCheckedSourceItems] = useState<Set<string>>(new Set());
   const [checkedTargetItems, setCheckedTargetItems] = useState<Set<string>>(new Set());
 
+  // Merge Items Modal State
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [mergeCandidates, setMergeCandidates] = useState<{
+    key: string;
+    name: string;
+    expiryStr: string;
+    totalQty: number;
+    items: FoodItem[];
+  }[]>([]);
+
   // Cache for category predictions to save API calls
   const predictionCache = useRef<Record<string, string>>({});
+  
+  // Ref for Voice Processing Lock
+  const isProcessingVoiceRef = useRef(false);
 
-  // --- UI Helpers ---
-
-  const getCategoryIcon = (category: string) => {
-    if (category.includes('잎채소')) return '🥬';
-    if (category.includes('뿌리')) return '🥕';
-    if (category.includes('열매')) return '🌶️';
-    if (category.includes('버섯')) return '🍄';
-    if (category.includes('열대')) return '🍌';
-    if (category.includes('과일')) return '🍎';
-    if (category.includes('소고기')) return '🥩';
-    if (category.includes('돼지')) return '🥓';
-    if (category.includes('닭')) return '🍗';
-    if (category.includes('생선')) return '🐟';
-    if (category.includes('우유')) return '🥛';
-    if (category.includes('계란')) return '🥚';
-    if (category.includes('두부')) return '🧊';
-    if (category.includes('김치')) return '🥬';
-    if (category.includes('반찬')) return '🍱';
-    if (category.includes('소스')) return '🧂';
-    if (category.includes('음료')) return '🥤';
-    if (category.includes('빵')) return '🍞';
-    if (category.includes('냉동')) return '🧊';
-    if (category.includes('아이스크림')) return '🍦';
-    return '📦';
-  };
-
-  const getWeatherIcon = (className: string) => {
-    const code = weather.code;
-    if (code === undefined) {
-      if (weather.condition.includes('맑음')) return <Sun className={`${className} text-orange-500`} />;
-      if (weather.condition.includes('구름') || weather.condition.includes('흐림')) return <Cloud className={`${className} text-gray-400`} />;
-      if (weather.condition.includes('비')) return <CloudRain className={`${className} text-blue-400`} />;
-      if (weather.condition.includes('눈')) return <Snowflake className={`${className} text-cyan-300`} />;
-      return <Sun className={`${className} text-orange-500`} />;
-    }
-
-    if (code === 0 || code === 1) return <Sun className={`${className} text-orange-500`} />;
-    if (code <= 3) return <Cloud className={`${className} text-gray-400`} />;
-    if (code <= 48) return <Wind className={`${className} text-gray-400`} />;
-    if (code <= 67 || (code >= 80 && code <= 82)) return <CloudRain className={`${className} text-blue-400`} />;
-    if (code <= 77 || code >= 85) return <Snowflake className={`${className} text-cyan-300`} />;
-    if (code >= 95) return <CloudLightning className={`${className} text-purple-500`} />;
-    
-    return <Sun className={`${className} text-orange-500`} />;
-  };
-
-  const getWeatherLargeIcon = () => {
-     return getWeatherIcon("w-32 h-32 mx-auto mb-4 animate-bounce");
-  };
-
-  const getExpirationBadge = (days: number) => {
-    if (days < 0) {
-      return <span className="px-2 py-0.5 rounded text-xs font-bold bg-gray-800 text-white">만료됨</span>;
-    } else if (days === 0) {
-      return <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-600 animate-pulse">D-Day</span>;
-    } else if (days <= 3) {
-      return <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-600">D-{days}</span>;
-    } else if (days <= 7) {
-      return <span className="px-2 py-0.5 rounded text-xs font-bold bg-orange-100 text-orange-600">D-{days}</span>;
-    } else {
-      return <span className="px-2 py-0.5 rounded text-xs font-bold bg-green-100 text-green-600">D-{days}</span>;
-    }
-  };
+  // --- Logic Helpers ---
 
   // Persistence
   useEffect(() => localStorage.setItem('fridge_config', JSON.stringify(config)), [config]);
@@ -413,18 +346,6 @@ export default function App() {
     setIsGeneratingRecipes(false);
   };
 
-  // --- Logic Helpers ---
-  const getDaysUntilExpiration = (expiryDate?: number) => {
-    if (!expiryDate) return null;
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-    const expiry = new Date(expiryDate);
-    expiry.setHours(0, 0, 0, 0);
-    
-    const diffTime = expiry.getTime() - now.getTime();
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  };
-
   // --- Notification Logic ---
   const requestNotificationPermission = async () => {
     if (!('Notification' in window)) {
@@ -483,50 +404,29 @@ export default function App() {
     };
   }, [items, notificationPermission]);
 
-  // --- Helpers for Category Prediction & Icons ---
-  const checkLocalHeuristics = (name: string): string | null => {
-    const n = name.replace(/\s+/g, '');
-    if (n.includes('양배추')) return categories.find(c => c.includes('잎채소')) || '잎채소 (상추/깻잎 등)';
-    if (n.includes('배추') || n.includes('김치') || n.includes('깍두기')) return categories.find(c => c.includes('김치')) || '김치/절임배추';
-    if (n.includes('아이스크림')) return categories.find(c => c.includes('아이스크림')) || '아이스크림';
-    if (n.includes('양파') || n.includes('마늘') || n.includes('감자') || n.includes('당근') || n.includes('고구마') || n.includes('무')) return categories.find(c => c.includes('뿌리채소')) || '뿌리채소 (감자/당근 등)';
-    if (n.includes('대파') || n.includes('쪽파') || n.includes('상추') || n.includes('깻잎') || n.includes('시금치')) return categories.find(c => c.includes('잎채소')) || '잎채소 (상추/깻잎 등)';
-    if (n.includes('고추') || n.includes('오이') || n.includes('호박') || n.includes('토마토') || n.includes('가지')) return categories.find(c => c.includes('열매채소')) || '열매채소 (고추/오이 등)';
-    if (n.includes('버섯')) return categories.find(c => c.includes('버섯')) || '버섯류';
-    if (n.includes('사과') || n.includes('배') || n.includes('포도') || n.includes('딸기') || n.includes('바나나') || n.includes('귤')) return categories.find(c => c.includes('과일')) || '과일 (사과/배 등)';
-    if (n.includes('소고기') || n.includes('한우')) return categories.find(c => c.includes('소고기')) || '소고기';
-    if (n.includes('돼지') || n.includes('삼겹살')) return categories.find(c => c.includes('돼지')) || '돼지고기';
-    if (n.includes('닭') || n.includes('치킨')) return categories.find(c => c.includes('닭')) || '닭/오리고기';
-    if (n.includes('생선') || n.includes('고등어') || n.includes('오징어')) return categories.find(c => c.includes('생선')) || '생선/해산물';
-    if (n.includes('우유') || n.includes('치즈') || n.includes('요거트')) return categories.find(c => c.includes('우유')) || '우유/유제품';
-    if (n.includes('계란') || n.includes('달걀')) return categories.find(c => c.includes('계란')) || '계란/알류';
-    if (n.includes('두부') || n.includes('콩나물')) return categories.find(c => c.includes('두부')) || '두부/콩류';
-    return null;
-  };
-
-  const getExpirationColor = (days: number) => {
-    if (days < 0) return "text-red-600 font-bold";
-    if (days <= 3) return "text-orange-600 font-bold";
-    return "text-slate-500";
-  };
-
+  // --- Helpers for Category Prediction ---
+  // Optimized: Uses predictCategoryLocally from displayHelpers for instant feedback
+  
   // Auto Category Prediction
   useEffect(() => {
     setNewItemCat('');
     const trimmedName = newItemName.trim();
     if (!trimmedName) return;
 
-    const localPrediction = checkLocalHeuristics(trimmedName);
+    // 1. Try Local Heuristic (Instant)
+    const localPrediction = predictCategoryLocally(trimmedName);
     if (localPrediction) {
       setNewItemCat(localPrediction);
       return;
     }
 
+    // 2. Check Cache
     if (predictionCache.current[trimmedName]) {
       setNewItemCat(predictionCache.current[trimmedName]);
       return;
     }
     
+    // 3. Fallback to API (only if really needed, with shorter debounce)
     const timeout = setTimeout(async () => {
       setIsPredictingCat(true);
       try {
@@ -540,7 +440,7 @@ export default function App() {
       } finally {
         setIsPredictingCat(false);
       }
-    }, 1000); 
+    }, 500); // Reduced delay from 1000ms to 500ms for better responsiveness
 
     return () => clearTimeout(timeout);
   }, [newItemName, categories]);
@@ -608,52 +508,105 @@ export default function App() {
     setEditingItem(null);
   };
 
-  const handleVoiceAdd = async () => {
+  const handleVoiceAdd = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
       alert("이 브라우저는 음성 인식을 지원하지 않습니다.");
       return;
     }
 
+    // Global lock: if we are already processing voice (analyzing or waiting for API), do nothing
+    if (isProcessingVoiceRef.current) return;
+
     setIsListening(true);
+    isProcessingVoiceRef.current = true;
+    
+    // Local session lock: ensure THIS specific recognition session only processes one result
+    let sessionHandled = false;
+
     // @ts-ignore
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     recognition.lang = 'ko-KR'; 
-    recognition.start();
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.continuous = false; // Important: Single shot mode
 
     recognition.onresult = async (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setIsListening(false);
-      
-      const parsedItems = await GeminiService.parseVoiceInput(transcript, categories);
-      
-      const activeFridge = config.fridges.find(f => f.id === selectedFridgeId) || config.fridges[0];
-      const defaultDoorId = activeFridge?.doors[0]?.id || '';
+      // 1. Session Guard: If we already handled a result in this session, ignore subsequent firings
+      if (sessionHandled) return;
 
-      if (parsedItems.length > 0) {
-        const newItems = parsedItems.map(p => {
-          let expiryTimestamp = undefined;
-          if (p.expirationDate) {
-             try {
-                expiryTimestamp = new Date(p.expirationDate).getTime();
-             } catch (e) { console.warn("Invalid date from AI", e); }
-          }
-          return {
-            id: Date.now().toString() + Math.random().toString(),
-            name: p.name || '알 수 없음',
-            quantity: p.quantity || 1,
-            category: p.category || categories[0],
-            doorId: newItemDoor || defaultDoorId,
-            entryDate: Date.now(),
-            expirationDate: expiryTimestamp
-          };
-        });
-        setItems(prev => [...newItems, ...prev]);
-        setIsAddItemOpen(false);
+      const result = event.results[0];
+      // 2. Finality Guard: Prefer final results (though usually covered by interimResults=false)
+      if (!result.isFinal && event.results.length > 0) {
+         // Some browsers might send interim even if requested false, skip if possible
+         // But usually with interimResults=false, we only get final.
+      }
+
+      const transcript = result[0].transcript;
+      
+      // 3. Content Guard: Ignore empty or garbage noise (e.g., single char '사' might be a partial trigger)
+      if (!transcript.trim()) {
+         return;
+      }
+      
+      // LOCK THE SESSION
+      sessionHandled = true;
+      recognition.stop();
+      
+      try {
+        const parsedItems = await GeminiService.parseVoiceInput(transcript, categories);
+        
+        const activeFridge = config.fridges.find(f => f.id === selectedFridgeId) || config.fridges[0];
+        const defaultDoorId = activeFridge?.doors[0]?.id || '';
+
+        if (parsedItems.length > 0) {
+          const newItems = parsedItems.map(p => {
+            let expiryTimestamp = undefined;
+            if (p.expirationDate) {
+               try {
+                  expiryTimestamp = new Date(p.expirationDate).getTime();
+               } catch (e) { console.warn("Invalid date from AI", e); }
+            }
+            return {
+              id: Date.now().toString() + Math.random().toString(),
+              name: p.name || '알 수 없음',
+              quantity: p.quantity || 1,
+              category: p.category || categories[0],
+              doorId: newItemDoor || defaultDoorId,
+              entryDate: Date.now(),
+              expirationDate: expiryTimestamp
+            };
+          });
+          setItems(prev => [...newItems, ...prev]);
+          setIsAddItemOpen(false);
+        }
+      } catch (error) {
+        console.error("Voice processing error:", error);
+      } finally {
+        // Unlock global state
+        setIsListening(false);
+        isProcessingVoiceRef.current = false;
       }
     };
 
-    recognition.onerror = () => setIsListening(false);
+    recognition.onerror = (e: any) => {
+        // Only reset if we haven't successfully started processing a result
+        if (!sessionHandled) {
+            console.error("Speech recognition error", e.error);
+            setIsListening(false);
+            isProcessingVoiceRef.current = false;
+        }
+    };
+    
+    recognition.onend = () => {
+        // If the session ended and we DID NOT handle any result (e.g. silence), reset
+        if (!sessionHandled && isProcessingVoiceRef.current) {
+            setIsListening(false);
+            isProcessingVoiceRef.current = false;
+        }
+    };
+
+    recognition.start();
   };
 
   // --- Voice Search Logic ---
@@ -668,6 +621,7 @@ export default function App() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     recognition.lang = 'ko-KR'; 
+    recognition.interimResults = false; // Ensure single result for search too
     recognition.start();
 
     recognition.onresult = (event: any) => {
@@ -743,7 +697,7 @@ export default function App() {
            setIsAddItemOpen(false);
            
            const uniqueDoorIds = Array.from(new Set(newItems.map(i => i.doorId)));
-           const doorNames = uniqueDoorIds.map(id => activeFridge.doors.find(d => d.id === id)?.name).join(', ');
+           const doorNames = uniqueDoorIds.map(id => activeFridge.doors.find(d => d.id)?.name).join(', ');
 
            alert(`${newItems.length}개의 품목이 '${activeFridge.name}'에 추가되었습니다.\n(저장 위치: ${doorNames})`);
         } else {
@@ -822,44 +776,6 @@ export default function App() {
     );
   };
 
-  const getFilteredAndSortedItems = (doorId: string) => {
-    let filtered = items.filter(i => i.doorId === doorId);
-    
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(item => 
-        item.name.toLowerCase().includes(query) || 
-        item.category.toLowerCase().includes(query)
-      );
-    }
-
-    return filtered.sort((a, b) => {
-      switch (sortMode) {
-        case 'name': return a.name.localeCompare(b.name);
-        case 'oldest': return a.entryDate - b.entryDate;
-        case 'recent': return b.entryDate - a.entryDate;
-        case 'quantity': return b.quantity - a.quantity;
-        case 'expiration': 
-          if (a.expirationDate && b.expirationDate) return a.expirationDate - b.expirationDate;
-          if (a.expirationDate) return -1;
-          if (b.expirationDate) return 1;
-          return 0;
-        default: return 0;
-      }
-    });
-  };
-  
-  const getSortLabel = (mode: SortMode) => {
-    switch(mode) {
-      case 'recent': return '최신순';
-      case 'oldest': return '오래된순';
-      case 'name': return '이름순';
-      case 'quantity': return '수량순';
-      case 'expiration': return '소비기한순';
-      default: return mode;
-    }
-  };
-
   const readRecipe = (recipe: RecipeSuggestion) => {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
@@ -868,23 +784,6 @@ export default function App() {
       utterance.lang = 'ko-KR';
       window.speechSynthesis.speak(utterance);
     }
-  };
-
-  const checkItemRestrictions = (itemName: string) => {
-     if (!config.userProfiles || config.userProfiles.length === 0) return null;
-     
-     const warnings: string[] = [];
-     config.userProfiles.forEach(user => {
-       const restrictions = user.restrictions.split(',').map(r => r.trim());
-       restrictions.forEach(r => {
-         if (r && itemName.includes(r)) {
-           warnings.push(`${user.name}(${r})`);
-         }
-       });
-     });
-     
-     if (warnings.length > 0) return warnings.join(', ');
-     return null;
   };
   
   const handleHardReset = () => {
@@ -984,6 +883,79 @@ export default function App() {
      return fridgeItems;
   };
 
+  // --- Merge Items Logic ---
+  const scanForDuplicates = () => {
+    const grouped: Record<string, FoodItem[]> = {};
+    
+    // Group by Name + ExpirationDate
+    items.forEach(item => {
+      // Normalize name: remove spaces, lowercase
+      const normName = item.name.replace(/\s+/g, '').toLowerCase();
+      // Normalize expiry: timestamp to date string, or 'none'
+      const normExpiry = item.expirationDate 
+        ? new Date(item.expirationDate).toISOString().split('T')[0] 
+        : 'none';
+      
+      const key = `${normName}|${normExpiry}`;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(item);
+    });
+
+    const candidates = Object.entries(grouped)
+      .filter(([_, group]) => group.length > 1)
+      .map(([key, group]) => {
+        const [_, expiryStr] = key.split('|');
+        return {
+          key,
+          name: group[0].name, // Use display name of first item
+          expiryStr: expiryStr === 'none' ? '설정 안됨' : expiryStr,
+          totalQty: group.reduce((sum, i) => sum + i.quantity, 0),
+          items: group
+        };
+      });
+
+    if (candidates.length === 0) {
+      alert("합칠 수 있는 중복 식재료(이름과 소비기한 동일)가 없습니다.");
+      return;
+    }
+
+    setMergeCandidates(candidates);
+    setIsMergeModalOpen(true);
+  };
+
+  const executeMerge = () => {
+    if (mergeCandidates.length === 0) return;
+
+    let newItems = [...items];
+    let mergedCount = 0;
+
+    mergeCandidates.forEach(candidate => {
+      // 1. Keep the first item as target (usually earliest entry)
+      // Sort by entry date just in case
+      const sortedGroup = candidate.items.sort((a, b) => a.entryDate - b.entryDate);
+      const targetItem = sortedGroup[0];
+      const otherItems = sortedGroup.slice(1);
+      const otherIds = otherItems.map(i => i.id);
+
+      // 2. Update target item quantity
+      // Logic: Map through items, if id matches target, update qty. If id matches others, remove.
+      newItems = newItems.filter(i => !otherIds.includes(i.id));
+      newItems = newItems.map(i => {
+        if (i.id === targetItem.id) {
+          return { ...i, quantity: candidate.totalQty };
+        }
+        return i;
+      });
+      
+      mergedCount += otherItems.length;
+    });
+
+    setItems(newItems);
+    setIsMergeModalOpen(false);
+    setMergeCandidates([]);
+    alert(`${mergedCount}개의 항목이 성공적으로 합쳐졌습니다.`);
+  };
+
   // --- Export / Import Data ---
 
   const handleExportData = () => {
@@ -1042,7 +1014,6 @@ export default function App() {
 
   if (!config.isSetup) {
     // Initial Setup View
-    // Using a temp state to manage the setup form before committing to config
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="bg-white max-w-2xl w-full p-8 rounded-3xl shadow-xl">
@@ -1062,10 +1033,8 @@ export default function App() {
 
   // --- Derived State for Rendering ---
   
-  // Decide which doors to show
-  // If Searching: Show doors from ALL fridges that contain matching items
-  // If Not Searching: Show doors from the SELECTED fridge
-  
+  const isAddItemValid = newItemName.trim().length > 0 && newItemCat.length > 0;
+
   let visibleDoors: { fridgeId: string, fridgeName: string, door: DoorConfig }[] = [];
   
   if (searchQuery.trim()) {
@@ -1119,391 +1088,136 @@ export default function App() {
     );
   }
 
-  // Header Data
-  const year = currentTime.getFullYear();
-  const month = currentTime.getMonth() + 1;
-  const day = currentTime.getDate();
-  const weekday = currentTime.toLocaleDateString('ko-KR', { weekday: 'long' });
-  
-  const dateStr = `${year}년 ${month}월 ${day}일 ${weekday}`;
-  const timeStr = currentTime.toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-  const isAddItemValid = newItemName.trim().length > 0 && newItemCat.length > 0;
-
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col">
-      {/* --- Header --- */}
-      <header className="bg-white border-b border-slate-200 px-8 py-6 flex justify-between items-center sticky top-0 z-20">
-        {/* Left: Time & Date */}
-        <div className="flex flex-col">
-          <div className="flex items-center gap-2 mb-1 opacity-60">
-            <Refrigerator className="w-5 h-5" />
-            <span className="font-bold text-sm tracking-wide">{config.name}</span>
-          </div>
-          <div className="text-7xl font-black text-slate-900 font-mono leading-none tracking-tighter">
-            {timeStr}
-          </div>
-          <div className="text-2xl font-bold text-slate-500 mt-2">
-            {dateStr}
-          </div>
-        </div>
-
-        {/* Right: Weather & Settings */}
-        <div className="flex items-center gap-8">
-          <button 
-            onClick={() => setIsWeatherOpen(true)}
-            className="flex items-center gap-4 text-right group"
-          >
-            <div className="flex flex-col items-end">
-              <div className="text-5xl font-bold text-slate-800 leading-none group-hover:text-blue-600 transition">
-                {weather.temp}°
-              </div>
-              <div className="text-lg text-slate-500 font-medium flex items-center gap-1">
-                {weather.condition}
-                <span className="text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-400">
-                   {weather.pm25}
-                </span>
-              </div>
-            </div>
-            <div className="group-hover:scale-110 transition duration-300">
-              {getWeatherIcon("w-16 h-16")}
-            </div>
-          </button>
-
-          <div className="w-px h-16 bg-slate-200"></div>
-
-          <button 
-            onClick={() => setIsSettingsOpen(true)}
-            className="p-4 hover:bg-slate-50 rounded-2xl transition group"
-          >
-            <Settings className="w-8 h-8 text-slate-400 group-hover:text-slate-800 group-hover:rotate-45 transition duration-300" />
-          </button>
-        </div>
-      </header>
+      {/* 1.1 Header Component (Clock, Weather, Settings) */}
+      <Header 
+        currentTime={currentTime}
+        weather={weather}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenWeather={() => setIsWeatherOpen(true)}
+      />
 
       {/* --- Main Content --- */}
       <main className="flex-1 p-6 overflow-hidden flex flex-col gap-6">
         
-        {/* Top Section: AI Recommendations */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="md:col-span-3 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
-            <div className="absolute top-0 right-0 p-4 opacity-10">
-              <ChefHat className="w-32 h-32" />
-            </div>
-            <div className="relative z-10">
-              <h2 className="text-xl font-bold flex items-center gap-2 mb-4">
-                <ChefHat className="w-6 h-6" />
-                AI 셰프 추천 메뉴
-                {isGeneratingRecipes && <span className="text-sm font-normal opacity-75 animate-pulse ml-2">생각 중...</span>}
-                {!isGeneratingRecipes && items.length > 0 && (
-                   <button 
-                     onClick={fetchRecipes}
-                     className="p-1.5 bg-white/20 hover:bg-white/30 rounded-full transition ml-auto flex items-center gap-1 text-sm font-normal"
-                     title="레시피 새로고침"
-                   >
-                     <RefreshCw className="w-4 h-4 text-white" />
-                     새로고침
-                   </button>
-                )}
-              </h2>
-              
-              {recipes.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {recipes.map((recipe, idx) => (
-                    <div 
-                      key={idx} 
-                      onClick={() => setSelectedRecipe(recipe)}
-                      className="bg-white/10 backdrop-blur-md rounded-xl p-4 border border-white/20 hover:bg-white/20 transition cursor-pointer relative group"
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                         <span className="text-xs font-bold bg-indigo-800/50 px-2 py-1 rounded text-indigo-100">
-                           {recipe.timeOfDay}
-                         </span>
-                         {recipe.warning && (
-                           <AlertCircle className="w-5 h-5 text-red-300 animate-pulse" />
-                         )}
-                      </div>
-                      <h3 className="font-bold text-lg mb-2 leading-tight">{recipe.title}</h3>
-                      <div className="flex items-center gap-2 text-xs opacity-80">
-                         <span>🔥 {recipe.calories} kcal</span>
-                         <span>•</span>
-                         <span>재료 {recipe.matchPercentage}% 활용</span>
-                      </div>
-                      <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition rounded-xl" />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="flex items-center gap-4">
-                   <p className="opacity-90">냉장고에 식재료를 추가하여 가족을 위한 맞춤 메뉴를 추천받아보세요!</p>
-                   <button onClick={fetchRecipes} className="bg-white text-indigo-600 px-4 py-2 rounded-lg font-bold text-sm hover:bg-indigo-50 transition">
-                     메뉴 추천받기
-                   </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        {/* 1.2 AI Chef Recommendations */}
+        <AIChefRecommendations 
+          recipes={recipes}
+          isGeneratingRecipes={isGeneratingRecipes}
+          hasItems={items.length > 0}
+          onFetchRecipes={fetchRecipes}
+          onSelectRecipe={setSelectedRecipe}
+        />
 
-        {/* Search & Sorting & Global Controls */}
-        <div className="bg-white p-3 rounded-2xl shadow-sm flex flex-col xl:flex-row gap-4 items-center">
-          
-          {/* Fridge Tabs (Left of Search) */}
-          <div className="flex gap-2 overflow-x-auto max-w-full xl:max-w-xs pb-2 xl:pb-0 shrink-0 custom-scrollbar">
-             {config.fridges.map(fridge => (
-               <button
-                 key={fridge.id}
-                 onClick={() => {
-                   setSelectedFridgeId(fridge.id);
-                   setSearchQuery(''); // Clear search when switching context
-                 }}
-                 className={`px-4 py-3 rounded-xl text-sm font-bold whitespace-nowrap transition flex items-center gap-2 ${
-                   selectedFridgeId === fridge.id && !searchQuery
-                   ? 'bg-slate-800 text-white shadow-md' 
-                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                 }`}
-               >
-                 <Refrigerator className="w-4 h-4" />
-                 {fridge.name}
-               </button>
-             ))}
-          </div>
+        {/* 1.3 Fridge Controls (Search, Sort, Categories, Merge) */}
+        <FridgeControls 
+          fridges={config.fridges}
+          selectedFridgeId={selectedFridgeId}
+          onSelectFridge={setSelectedFridgeId}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          isVoiceSearching={isVoiceSearching}
+          onVoiceSearch={handleVoiceSearch}
+          sortMode={sortMode}
+          onSortChange={setSortMode}
+          onOpenCategoryManager={() => setIsCategoryManagerOpen(true)}
+          onOpenMoveModal={handleOpenMoveModal}
+          onOpenMergeModal={scanForDuplicates} // Connect merge function
+          showMoveButton={config.fridges.length >= 2}
+        />
 
-          {/* Search Bar */}
-          <div className="flex-1 w-full relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-            <input 
-              type="text" 
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              placeholder="모든 냉장고에서 식재료 검색..."
-              className={`w-full pl-10 pr-12 py-3 border rounded-xl focus:outline-none focus:border-blue-500 transition ${
-                searchQuery ? 'bg-white border-blue-500 ring-2 ring-blue-100' : 'bg-slate-50 border-slate-200'
-              }`}
-            />
-            <button 
-              onClick={handleVoiceSearch}
-              className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg transition ${
-                isVoiceSearching ? 'text-red-500 bg-red-50 animate-pulse' : 'text-slate-400 hover:text-blue-500 hover:bg-blue-50'
-              }`}
-              title="음성 검색"
-            >
-              <Mic className="w-5 h-5" />
-            </button>
-          </div>
-
-          <div className="flex gap-2 w-full xl:w-auto overflow-x-auto pb-1 xl:pb-0 justify-start xl:justify-end">
-            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl shrink-0">
-              {(['recent', 'oldest', 'name', 'quantity', 'expiration'] as SortMode[]).map(mode => (
-                <button
-                  key={mode}
-                  onClick={() => setSortMode(mode)}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap ${
-                    sortMode === mode ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  {getSortLabel(mode)}
-                </button>
-              ))}
-            </div>
-            <button 
-              onClick={() => setIsCategoryManagerOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 border border-slate-200 rounded-xl shrink-0"
-            >
-              <LayoutGrid className="w-4 h-4" />
-              카테고리관리
-            </button>
-            {config.fridges.length >= 2 && (
-              <button 
-                onClick={handleOpenMoveModal}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-slate-800 hover:bg-slate-700 border border-slate-800 rounded-xl shrink-0 shadow-sm transition"
-              >
-                <MoveHorizontal className="w-4 h-4" />
-                냉장고물건이동
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Fridge Grid Layout */}
-        <div className={`grid gap-6 flex-1 min-h-0 overflow-y-auto pb-6 ${
-          visibleDoors.length === 1 ? 'grid-cols-1' :
-          visibleDoors.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
-          'grid-cols-1 md:grid-cols-2 xl:grid-cols-2'
-        }`}>
-          {searchQuery && visibleDoors.length === 0 && (
-             <div className="col-span-full flex flex-col items-center justify-center text-slate-400 min-h-[200px]">
-                <Search className="w-16 h-16 mb-4 opacity-20" />
-                <p className="text-lg">모든 냉장고에서 검색 결과가 없습니다.</p>
-             </div>
-          )}
-
-          {visibleDoors.map(({ fridgeId, fridgeName, door }) => {
-            const allItems = getFilteredAndSortedItems(door.id);
-            const isExpanded = expandedDoors.includes(door.id);
-            const shouldShowAll = isExpanded || searchQuery.trim().length > 0;
-            const visibleItems = shouldShowAll ? allItems : allItems.slice(0, 5);
-            
-            return (
-              <div 
-                key={door.id} 
-                className={`bg-white rounded-3xl shadow-sm border flex flex-col overflow-hidden group/door transition-all ${
-                  searchQuery ? 'border-blue-200 shadow-md ring-1 ring-blue-50' : 'border-slate-100'
-                }`}
-                onDragOver={handleDragOver}
-                onDrop={(e) => handleDrop(e, door.id)}
-              >
-                {/* Door Header */}
-                <div className={`p-4 border-b border-slate-100 transition-colors flex justify-between items-center ${
-                   draggedItemId ? 'bg-blue-50 border-blue-200' : 'bg-slate-50/50'
-                }`}>
-                  <div 
-                    onClick={() => toggleDoorExpansion(door.id)}
-                    className="flex items-center gap-3 cursor-pointer hover:opacity-70 transition flex-1"
-                  >
-                    <div className={`p-2 rounded-lg ${
-                      door.type === 'freezer' ? 'bg-blue-100 text-blue-600' : 
-                      door.type === 'pantry' ? 'bg-orange-100 text-orange-600' :
-                      'bg-green-100 text-green-600'
-                    }`}>
-                      {door.type === 'freezer' ? <Snowflake className="w-5 h-5" /> : 
-                       door.type === 'pantry' ? <Archive className="w-5 h-5" /> : 
-                       <Refrigerator className="w-5 h-5" />}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                         <h3 className="font-bold text-slate-700">
-                           {searchQuery && <span className="text-xs bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded mr-1 align-middle">{fridgeName}</span>}
-                           {door.name}
-                         </h3>
-                         {!searchQuery && (isExpanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />)}
-                      </div>
-                      <p className="text-xs text-slate-400">
-                        {allItems.length}개 품목 {allItems.length > 5 && !shouldShowAll ? '(5개만 표시됨)' : ''}
-                      </p>
-                    </div>
-                  </div>
-                  <button 
-                    onClick={() => {
-                      setNewItemName('');
-                      setNewItemCat('');
-                      setNewItemQty(1);
-                      // Force select the fridge this door belongs to, and select this door
-                      setSelectedFridgeId(fridgeId);
-                      setNewItemDoor(door.id);
-                      setNewItemExpiry('');
-                      setIsAddItemOpen(true);
-                    }}
-                    className="px-4 py-2 bg-slate-800 text-white border border-slate-800 rounded-xl hover:bg-slate-700 transition shadow-sm font-bold text-sm flex items-center gap-2"
-                  >
-                    <PackagePlus className="w-4 h-4" /> 보관
-                  </button>
-                </div>
-
-                {/* Door Content List */}
-                <div className="flex-1 overflow-y-auto p-2 space-y-2 max-h-[400px]">
-                  {visibleItems.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-300 py-10">
-                      <Search className="w-12 h-12 mb-2 opacity-20" />
-                      <p>{searchQuery ? '검색 결과 없음' : '비어있음'}</p>
-                    </div>
-                  ) : (
-                    visibleItems.map(item => {
-                      const restrictionWarning = checkItemRestrictions(item.name);
-                      const daysUntilExpiry = getDaysUntilExpiration(item.expirationDate);
-                      
-                      return (
-                        <div 
-                          key={item.id} 
-                          className="bg-white border border-slate-100 rounded-2xl p-3 flex justify-between items-center hover:shadow-md transition group relative cursor-grab active:cursor-grabbing"
-                          draggable={true}
-                          onDragStart={(e) => handleDragStart(e, item.id)}
-                        >
-                          <div className="flex items-center gap-3">
-                            <GripVertical className="w-4 h-4 text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity" />
-                            <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-lg shrink-0">
-                              {getCategoryIcon(item.category)}
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <p className="font-bold text-slate-800">{item.name}</p>
-                                {restrictionWarning && (
-                                  <div className="group/warn relative">
-                                    <AlertCircle className="w-4 h-4 text-red-500" />
-                                    <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-max bg-red-600 text-white text-xs px-2 py-1 rounded shadow-lg opacity-0 group-hover/warn:opacity-100 transition z-20">
-                                      {restrictionWarning} 섭취 주의
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                              <div className="flex flex-wrap items-center gap-2 mt-1">
-                                <p className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full inline-block">{item.category}</p>
-                                {daysUntilExpiry !== null && (
-                                  <div className="flex items-center gap-1">
-                                     {getExpirationBadge(daysUntilExpiry)}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            <div className="flex items-center bg-slate-50 rounded-lg p-1">
-                              <button 
-                                onClick={() => updateItemQty(item.id, -1)}
-                                className="w-8 h-8 flex items-center justify-center hover:bg-white rounded-md transition text-slate-500"
-                              >
-                                -
-                              </button>
-                              <span className="w-8 text-center font-bold text-slate-700">{item.quantity}</span>
-                              <button 
-                                onClick={() => updateItemQty(item.id, 1)}
-                                className="w-8 h-8 flex items-center justify-center hover:bg-white rounded-md transition text-slate-500"
-                              >
-                                +
-                              </button>
-                            </div>
-                            <button
-                              onClick={() => openEditModal(item)}
-                              className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition"
-                            >
-                              <Pencil className="w-5 h-5" />
-                            </button>
-                            <button 
-                              onClick={() => requestDeleteItem(item)}
-                              className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
-                            >
-                              <Trash2 className="w-5 h-5" />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                  {allItems.length > 5 && !shouldShowAll && (
-                     <button 
-                       onClick={() => toggleDoorExpansion(door.id)}
-                       className="w-full text-center text-sm text-slate-500 py-2 hover:bg-slate-50 rounded-xl"
-                     >
-                       + {allItems.length - 5}개 더보기
-                     </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        {/* 1.4 Fridge Grid (Doors and Items) */}
+        <FridgeGrid 
+          visibleDoors={visibleDoors}
+          items={items}
+          searchQuery={searchQuery}
+          sortMode={sortMode}
+          userProfiles={config.userProfiles}
+          expandedDoors={expandedDoors}
+          draggedItemId={draggedItemId}
+          onToggleDoor={toggleDoorExpansion}
+          onAddItemClick={(fridgeId, doorId) => {
+            setNewItemName('');
+            setNewItemCat('');
+            setNewItemQty(1);
+            setSelectedFridgeId(fridgeId);
+            setNewItemDoor(doorId);
+            setNewItemExpiry('');
+            setIsAddItemOpen(true);
+          }}
+          onUpdateItemQty={updateItemQty}
+          onEditItem={openEditModal}
+          onDeleteItem={requestDeleteItem}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+        />
       </main>
 
-      {/* --- Move Items Modal --- */}
+      {/* --- Modals (Kept in App.tsx as they are global overlays) --- */}
+      
+      {/* Merge Items Modal */}
+      {isMergeModalOpen && (
+        <Modal 
+          title="중복 식재료 합치기" 
+          onClose={() => setIsMergeModalOpen(false)}
+          maxWidthClass="max-w-xl"
+        >
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 text-blue-800 text-sm">
+              <p className="font-bold mb-1">다음 식재료들의 이름과 소비기한이 동일합니다.</p>
+              <p>하나로 합치면 수량은 더해지고, 나머지 중복 항목은 삭제됩니다.</p>
+            </div>
+            
+            <div className="max-h-[50vh] overflow-y-auto custom-scrollbar space-y-3">
+              {mergeCandidates.map((candidate) => (
+                <div key={candidate.key} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+                  <div className="flex justify-between items-center mb-2 border-b border-slate-100 pb-2">
+                    <h3 className="font-bold text-lg text-slate-800">{candidate.name}</h3>
+                    <span className="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded">
+                      {candidate.expiryStr === '설정 안됨' ? '소비기한 없음' : `~ ${candidate.expiryStr}`}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1 text-slate-600 text-sm">
+                      발견된 항목: {candidate.items.length}개
+                    </div>
+                    <ArrowRight className="w-4 h-4 text-slate-400" />
+                    <div className="font-bold text-blue-600">
+                      총 수량: {candidate.totalQty}개
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button 
+                onClick={() => setIsMergeModalOpen(false)}
+                className="flex-1 py-3 bg-white border border-slate-300 rounded-xl text-slate-600 font-bold hover:bg-slate-50 transition"
+              >
+                취소
+              </button>
+              <button 
+                onClick={executeMerge}
+                className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow-md transition"
+              >
+                모두 합치기
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {isMoveItemsModalOpen && (
         <Modal 
           title="냉장고 물건 이동" 
           onClose={() => setIsMoveItemsModalOpen(false)} 
           maxWidthClass="max-w-6xl"
         >
+          {/* Move Items Modal Content */}
           <div className="flex flex-col h-[70vh]">
-             {/* Search */}
              <div className="mb-4 relative shrink-0">
                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                <input 
@@ -1523,7 +1237,6 @@ export default function App() {
                     onChange={(e) => {
                        const id = e.target.value;
                        setMoveSourceFridgeId(id);
-                       // If source same as target, switch target
                        if (id === moveTargetFridgeId) {
                          const next = config.fridges.find(f => f.id !== id)?.id;
                          if (next) setMoveTargetFridgeId(next);
@@ -1659,7 +1372,6 @@ export default function App() {
         </Modal>
       )}
 
-      {/* --- Delete Confirmation Modal (Items) --- */}
       {itemToDelete && (
          <Modal title="식재료 삭제 확인" onClose={cancelDelete}>
             <div className="space-y-6">
@@ -1676,783 +1388,176 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                 <button 
-                   onClick={cancelDelete}
-                   className="py-4 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition"
-                 >
-                   취소
-                 </button>
-                 <button 
-                   onClick={confirmDelete}
-                   className="py-4 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 shadow-lg shadow-red-200 transition"
-                 >
-                   네, 삭제합니다
-                 </button>
+                 <button onClick={cancelDelete} className="py-4 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition">취소</button>
+                 <button onClick={confirmDelete} className="py-4 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 shadow-lg shadow-red-200 transition">네, 삭제합니다</button>
               </div>
             </div>
          </Modal>
       )}
 
-      {/* --- Add Item Modal --- */}
       {isAddItemOpen && (
         <Modal title="새로운 식재료 보관하기" onClose={() => setIsAddItemOpen(false)}>
           <div className="space-y-6">
-            
-            {/* Input Triggers */}
             <div className="grid grid-cols-2 gap-4">
-               {/* Voice Input Trigger */}
-               <button
-                 onClick={handleVoiceAdd}
-                 disabled={isListening || isAnalyzingReceipt}
-                 className={`flex flex-col items-center justify-center h-32 rounded-3xl transition-all ${
-                   isListening 
-                   ? 'bg-red-100 text-red-600 animate-pulse border-2 border-red-200' 
-                   : 'bg-blue-50 text-blue-600 hover:bg-blue-100 border-2 border-transparent'
-                 }`}
-               >
+               <button onClick={handleVoiceAdd} disabled={isListening || isAnalyzingReceipt} className={`flex flex-col items-center justify-center h-32 rounded-3xl transition-all ${isListening ? 'bg-red-100 text-red-600 animate-pulse border-2 border-red-200' : 'bg-blue-50 text-blue-600 hover:bg-blue-100 border-2 border-transparent'}`}>
                  <Mic className={`w-10 h-10 mb-2 ${isListening ? 'animate-bounce' : ''}`} />
                  <span className="text-xs font-bold">{isListening ? '듣고 있어요...' : '음성으로 추가'}</span>
                </button>
-
-               {/* Receipt Input Trigger */}
-               <button
-                 onClick={handleReceiptClick}
-                 disabled={isListening || isAnalyzingReceipt}
-                 className={`flex flex-col items-center justify-center h-32 rounded-3xl transition-all ${
-                   isAnalyzingReceipt
-                   ? 'bg-green-100 text-green-600 animate-pulse border-2 border-green-200'
-                   : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border-2 border-transparent'
-                 }`}
-               >
-                 {isAnalyzingReceipt ? (
-                   <ScanLine className="w-10 h-10 mb-2 animate-spin-slow" />
-                 ) : (
-                   <Camera className="w-10 h-10 mb-2" />
-                 )}
+               <button onClick={handleReceiptClick} disabled={isListening || isAnalyzingReceipt} className={`flex flex-col items-center justify-center h-32 rounded-3xl transition-all ${isAnalyzingReceipt ? 'bg-green-100 text-green-600 animate-pulse border-2 border-green-200' : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border-2 border-transparent'}`}>
+                 {isAnalyzingReceipt ? <ScanLine className="w-10 h-10 mb-2 animate-spin-slow" /> : <Camera className="w-10 h-10 mb-2" />}
                  <span className="text-xs font-bold">{isAnalyzingReceipt ? '영수증 분석 중...' : '영수증 촬영/업로드'}</span>
                </button>
-               <input 
-                 type="file" 
-                 ref={receiptInputRef} 
-                 onChange={handleReceiptChange} 
-                 accept="image/*" 
-                 capture="environment"
-                 className="hidden" 
-               />
+               <input type="file" ref={receiptInputRef} onChange={handleReceiptChange} accept="image/*" capture="environment" className="hidden" />
             </div>
-            
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-gray-200"></div>
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-white text-gray-500">또는 직접 입력하기</span>
-              </div>
-            </div>
-
+            <div className="relative"><div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-200"></div></div><div className="relative flex justify-center text-sm"><span className="px-2 bg-white text-gray-500">또는 직접 입력하기</span></div></div>
             <form onSubmit={handleAddItem} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">식재료</label>
                 <div className="relative">
-                  <input 
-                    type="text" 
-                    value={newItemName}
-                    onChange={e => setNewItemName(e.target.value)}
-                    className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none pr-10"
-                    placeholder="예: 우유, 사과"
-                  />
-                  {isPredictingCat && (
-                    <div className="absolute right-3 top-3.5 animate-spin">
-                      <Clock className="w-5 h-5 text-gray-400" />
-                    </div>
-                  )}
+                  <input type="text" value={newItemName} onChange={e => setNewItemName(e.target.value)} className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none pr-10" placeholder="예: 우유, 사과" />
+                  {isPredictingCat && <div className="absolute right-3 top-3.5 animate-spin"><Clock className="w-5 h-5 text-gray-400" /></div>}
                 </div>
               </div>
-
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">수량</label>
-                  <input 
-                    type="number" 
-                    min="1"
-                    value={newItemQty}
-                    onChange={e => setNewItemQty(parseInt(e.target.value))}
-                    className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none"
-                  />
-                </div>
+                <div><label className="block text-sm font-medium text-gray-700 mb-1">수량</label><input type="number" min="1" value={newItemQty} onChange={e => setNewItemQty(parseInt(e.target.value))} className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none" /></div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">카테고리</label>
-                  <select 
-                    value={newItemCat}
-                    onChange={e => setNewItemCat(e.target.value)}
-                    className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                  >
+                  <select value={newItemCat} onChange={e => setNewItemCat(e.target.value)} className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white">
                     <option value="" disabled>카테고리 선택</option>
                     {categories.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
               </div>
-              
               <div className="grid grid-cols-2 gap-4">
                  <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">보관 위치</label>
-                    <select
-                      value={newItemDoor}
-                      onChange={e => setNewItemDoor(e.target.value)}
-                      className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                    >
+                    <select value={newItemDoor} onChange={e => setNewItemDoor(e.target.value)} className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white">
                       <option value="" disabled>위치 선택</option>
-                      {/* Show doors from the selected fridge primarily, or all fridges? 
-                          Let's show all fridges grouped by optgroup for flexibility */}
-                      {config.fridges.map(fridge => (
-                        <optgroup key={fridge.id} label={fridge.name}>
-                          {fridge.doors.map(d => (
-                            <option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : d.type === 'freezer' ? '냉동' : '상온'})</option>
-                          ))}
-                        </optgroup>
-                      ))}
+                      {config.fridges.map(fridge => (<optgroup key={fridge.id} label={fridge.name}>{fridge.doors.map(d => (<option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : d.type === 'freezer' ? '냉동' : '상온'})</option>))}</optgroup>))}
                     </select>
                  </div>
-                 <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">소비기한 (선택)</label>
-                    <input 
-                      type="date" 
-                      value={newItemExpiry}
-                      onChange={e => setNewItemExpiry(e.target.value)}
-                      className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                    />
-                 </div>
+                 <div><label className="block text-sm font-medium text-gray-700 mb-1">소비기한 (선택)</label><input type="date" value={newItemExpiry} onChange={e => setNewItemExpiry(e.target.value)} className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white" /></div>
               </div>
-
-              <button 
-                type="submit" 
-                disabled={!isAddItemValid}
-                className={`w-full py-4 rounded-xl font-bold text-lg transition ${
-                   isAddItemValid 
-                   ? 'bg-slate-900 text-white hover:bg-slate-800' 
-                   : 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                }`}
-              >
-                보관하기
-              </button>
+              <button type="submit" disabled={!isAddItemValid} className={`w-full py-4 rounded-xl font-bold text-lg transition ${isAddItemValid ? 'bg-slate-900 text-white hover:bg-slate-800' : 'bg-slate-300 text-slate-500 cursor-not-allowed'}`}>보관하기</button>
             </form>
           </div>
         </Modal>
       )}
 
-      {/* --- Edit Item Modal --- */}
       {isEditItemOpen && (
         <Modal title="식재료 정보 수정" onClose={() => setIsEditItemOpen(false)}>
            <form onSubmit={handleUpdateItem} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">식재료</label>
-                <input 
-                  type="text" 
-                  value={editName}
-                  onChange={e => setEditName(e.target.value)}
-                  className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-              </div>
-
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">식재료</label><input type="text" value={editName} onChange={e => setEditName(e.target.value)} className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none" /></div>
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">수량</label>
-                  <input 
-                    type="number" 
-                    min="1"
-                    value={editQty}
-                    onChange={e => setEditQty(parseInt(e.target.value))}
-                    className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none"
-                  />
-                </div>
+                <div><label className="block text-sm font-medium text-gray-700 mb-1">수량</label><input type="number" min="1" value={editQty} onChange={e => setEditQty(parseInt(e.target.value))} className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none" /></div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">카테고리</label>
-                  <select 
-                    value={editCat}
-                    onChange={e => setEditCat(e.target.value)}
-                    className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                  >
+                  <select value={editCat} onChange={e => setEditCat(e.target.value)} className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white">
                     {categories.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
               </div>
-              
               <div className="grid grid-cols-2 gap-4">
                  <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">보관 위치</label>
-                    <select
-                      value={editDoor}
-                      onChange={e => setEditDoor(e.target.value)}
-                      className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                    >
-                      {config.fridges.map(fridge => (
-                        <optgroup key={fridge.id} label={fridge.name}>
-                          {fridge.doors.map(d => (
-                            <option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : d.type === 'freezer' ? '냉동' : '상온'})</option>
-                          ))}
-                        </optgroup>
-                      ))}
+                    <select value={editDoor} onChange={e => setEditDoor(e.target.value)} className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                      {config.fridges.map(fridge => (<optgroup key={fridge.id} label={fridge.name}>{fridge.doors.map(d => (<option key={d.id} value={d.id}>{d.name} ({d.type === 'fridge' ? '냉장' : d.type === 'freezer' ? '냉동' : '상온'})</option>))}</optgroup>))}
                     </select>
                  </div>
-                 <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">소비기한</label>
-                    <input 
-                      type="date" 
-                      value={editExpiry}
-                      onChange={e => setEditExpiry(e.target.value)}
-                      className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                    />
-                 </div>
+                 <div><label className="block text-sm font-medium text-gray-700 mb-1">소비기한</label><input type="date" value={editExpiry} onChange={e => setEditExpiry(e.target.value)} className="w-full border rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-white" /></div>
               </div>
-
-              <button type="submit" className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-blue-700 transition">
-                수정 완료
-              </button>
+              <button type="submit" className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-blue-700 transition">수정 완료</button>
             </form>
         </Modal>
       )}
 
-      {/* --- Recipe Detail Modal --- */}
       {selectedRecipe && (
-        <Modal title={selectedRecipe.title} onClose={() => {
-           window.speechSynthesis.cancel(); 
-           setSelectedRecipe(null);
-        }}>
+        <Modal title={selectedRecipe.title} onClose={() => {window.speechSynthesis.cancel(); setSelectedRecipe(null);}}>
           <div className="space-y-6">
             {selectedRecipe.warning && (
-              <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-start gap-3">
-                 <AlertCircle className="w-6 h-6 shrink-0" />
-                 <div>
-                   <h4 className="font-bold">주의: 식이 제한 알림</h4>
-                   <p className="text-sm">{selectedRecipe.warning}</p>
-                 </div>
-              </div>
+              <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-start gap-3"><AlertCircle className="w-6 h-6 shrink-0" /><div><h4 className="font-bold">주의: 식이 제한 알림</h4><p className="text-sm">{selectedRecipe.warning}</p></div></div>
             )}
-
             <div className="flex justify-between items-start">
-               <div>
-                  <p className="text-gray-600 mb-2">{selectedRecipe.description}</p>
-                  <div className="flex gap-4 text-sm text-gray-500">
-                     <span>🔥 {selectedRecipe.calories} kcal</span>
-                     <span>🕒 {selectedRecipe.timeOfDay} 메뉴</span>
-                  </div>
-               </div>
-               <div className="flex gap-2">
-                 <button 
-                   onClick={() => readRecipe(selectedRecipe)}
-                   className="p-3 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition"
-                   title="레시피 읽어주기"
-                 >
-                   <Volume2 className="w-6 h-6" />
-                 </button>
-                 <a 
-                   href={`https://www.youtube.com/results?search_query=${encodeURIComponent(selectedRecipe.youtubeQuery || selectedRecipe.title)}`}
-                   target="_blank"
-                   rel="noopener noreferrer"
-                   className="p-3 bg-red-50 text-red-600 rounded-full hover:bg-red-100 transition flex items-center justify-center"
-                   title="유튜브 영상 검색"
-                 >
-                   <Youtube className="w-6 h-6" />
-                 </a>
-               </div>
+               <div><p className="text-gray-600 mb-2">{selectedRecipe.description}</p><div className="flex gap-4 text-sm text-gray-500"><span>🔥 {selectedRecipe.calories} kcal</span><span>🕒 {selectedRecipe.timeOfDay} 메뉴</span></div></div>
+               <div className="flex gap-2"><button onClick={() => readRecipe(selectedRecipe)} className="p-3 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition" title="레시피 읽어주기"><Volume2 className="w-6 h-6" /></button><a href={`https://www.youtube.com/results?search_query=${encodeURIComponent(selectedRecipe.youtubeQuery || selectedRecipe.title)}`} target="_blank" rel="noopener noreferrer" className="p-3 bg-red-50 text-red-600 rounded-full hover:bg-red-100 transition flex items-center justify-center" title="유튜브 영상 검색"><Youtube className="w-6 h-6" /></a></div>
             </div>
-            
-            <div className="bg-red-50/50 p-4 rounded-xl border border-red-100 flex items-center justify-between">
-               <div className="flex items-center gap-3">
-                  <Youtube className="w-8 h-8 text-red-600" />
-                  <div>
-                    <h4 className="font-bold text-slate-800">이 요리, 영상으로 배워보세요</h4>
-                    <p className="text-sm text-slate-500">인기 유튜브 조리법 영상을 찾아드립니다.</p>
-                  </div>
-               </div>
-               <a 
-                   href={`https://www.youtube.com/results?search_query=${encodeURIComponent(selectedRecipe.youtubeQuery || selectedRecipe.title)}`}
-                   target="_blank"
-                   rel="noopener noreferrer"
-                   className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold text-sm transition shadow-sm"
-               >
-                 영상 보기
-               </a>
-            </div>
-
             <div>
-              <div className="flex items-center justify-between mb-3 border-b pb-2">
-                <h3 className="font-bold text-lg">준비물</h3>
-                <div className="flex gap-4 text-xs font-medium">
-                  <span className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-green-500"></div>보유 중</span>
-                  <span className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-red-500"></div>구매 필요</span>
-                </div>
-              </div>
-              <ul className="grid grid-cols-3 gap-2">
-                {selectedRecipe.ingredients.map((ing, i) => (
-                  <li key={i} className="flex items-center gap-2 text-gray-700 bg-slate-50 p-2 rounded-lg text-sm">
-                    <div className={`shrink-0 w-2 h-2 rounded-full ${ing.isAvailable ? 'bg-green-500' : 'bg-red-500'}`} />
-                    <span className={`truncate ${!ing.isAvailable ? 'text-red-600 font-medium' : ''}`}>
-                      {ing.name}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <div className="flex items-center justify-between mb-3 border-b pb-2"><h3 className="font-bold text-lg">준비물</h3><div className="flex gap-4 text-xs font-medium"><span className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-green-500"></div>보유 중</span><span className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-red-500"></div>구매 필요</span></div></div>
+              <ul className="grid grid-cols-3 gap-2">{selectedRecipe.ingredients.map((ing, i) => (<li key={i} className="flex items-center gap-2 text-gray-700 bg-slate-50 p-2 rounded-lg text-sm"><div className={`shrink-0 w-2 h-2 rounded-full ${ing.isAvailable ? 'bg-green-500' : 'bg-red-500'}`} /><span className={`truncate ${!ing.isAvailable ? 'text-red-600 font-medium' : ''}`}>{ing.name}</span></li>))}</ul>
             </div>
-
             <div>
               <h3 className="font-bold text-lg mb-3 border-b pb-2">상세 조리 순서</h3>
-              <ol className="space-y-6">
-                {selectedRecipe.steps.map((step, i) => (
-                   <li key={i} className="flex gap-4">
-                     <span className="flex-shrink-0 w-8 h-8 bg-slate-900 text-white rounded-full flex items-center justify-center font-bold text-sm">{i+1}</span>
-                     <p className="text-gray-700 mt-1 leading-relaxed">{step}</p>
-                   </li>
-                ))}
-              </ol>
+              <ol className="space-y-6">{selectedRecipe.steps.map((step, i) => (<li key={i} className="flex gap-4"><span className="flex-shrink-0 w-8 h-8 bg-slate-900 text-white rounded-full flex items-center justify-center font-bold text-sm">{i+1}</span><p className="text-gray-700 mt-1 leading-relaxed">{step}</p></li>))}</ol>
             </div>
           </div>
         </Modal>
       )}
 
-      {/* --- Weather Modal --- */}
       {isWeatherOpen && (
         <Modal title="현재 날씨 상세" onClose={() => setIsWeatherOpen(false)}>
           <div className="text-center py-6">
-            {getWeatherLargeIcon()}
             <div className="text-5xl font-bold text-slate-800 mb-2">{weather.temp}°C</div>
             <div className="text-xl text-slate-500 mb-8">{weather.condition}</div>
-            
             <div className="grid grid-cols-3 gap-4 mb-8">
-               <div className="bg-slate-50 p-4 rounded-xl">
-                  <Droplets className="w-6 h-6 text-blue-500 mx-auto mb-2" />
-                  <div className="text-sm text-gray-400">습도</div>
-                  <div className="font-bold">{weather.humidity}%</div>
-               </div>
-               <div className="bg-slate-50 p-4 rounded-xl">
-                  <Wind className="w-6 h-6 text-cyan-500 mx-auto mb-2" />
-                  <div className="text-sm text-gray-400">바람</div>
-                  <div className="font-bold">{weather.wind}</div>
-               </div>
-               <div className="bg-slate-50 p-4 rounded-xl">
-                  <CloudRain className="w-6 h-6 text-gray-500 mx-auto mb-2" />
-                  <div className="text-sm text-gray-400">미세먼지</div>
-                  <div className={`font-bold ${weather.pm25 === '좋음' || weather.pm25 === '보통' ? 'text-green-600' : 'text-red-600'}`}>{weather.pm25}</div>
-               </div>
+               <div className="bg-slate-50 p-4 rounded-xl"><Droplets className="w-6 h-6 text-blue-500 mx-auto mb-2" /><div className="text-sm text-gray-400">습도</div><div className="font-bold">{weather.humidity}%</div></div>
+               <div className="bg-slate-50 p-4 rounded-xl"><Wind className="w-6 h-6 text-cyan-500 mx-auto mb-2" /><div className="text-sm text-gray-400">바람</div><div className="font-bold">{weather.wind}</div></div>
+               <div className="bg-slate-50 p-4 rounded-xl"><CloudRain className="w-6 h-6 text-gray-500 mx-auto mb-2" /><div className="text-sm text-gray-400">미세먼지</div><div className={`font-bold ${weather.pm25 === '좋음' || weather.pm25 === '보통' ? 'text-green-600' : 'text-red-600'}`}>{weather.pm25}</div></div>
             </div>
-            
-            <div className="bg-blue-50 p-4 rounded-xl text-blue-800">
-               {weather.forecast}
-            </div>
+            <div className="bg-blue-50 p-4 rounded-xl text-blue-800">{weather.forecast}</div>
           </div>
         </Modal>
       )}
 
-      {/* --- Category Manager Modal --- */}
       {isCategoryManagerOpen && (
         <Modal title="카테고리 관리" onClose={() => setIsCategoryManagerOpen(false)}>
            <div className="space-y-4">
-             <div className="flex gap-2">
-               <input 
-                 type="text" 
-                 value={newCategoryInput}
-                 onChange={e => setNewCategoryInput(e.target.value)}
-                 className="flex-1 border rounded-xl p-3 focus:outline-none focus:border-blue-500"
-                 placeholder="새 카테고리 이름"
-               />
-               <button 
-                 onClick={handleAddCategory}
-                 disabled={!newCategoryInput.trim()}
-                 className={`px-4 rounded-xl font-bold text-white transition ${
-                   newCategoryInput.trim() ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-300'
-                 }`}
-               >
-                 추가
-               </button>
-             </div>
-             
-             <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-               {categories.map(cat => (
-                 <div key={cat} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
-                   <span className="font-medium text-slate-700">{cat}</span>
-                   <button 
-                     onClick={() => handleDeleteCategory(cat)}
-                     className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
-                     title="삭제"
-                   >
-                     <Trash2 className="w-4 h-4" />
-                   </button>
-                 </div>
-               ))}
-             </div>
+             <div className="flex gap-2"><input type="text" value={newCategoryInput} onChange={e => setNewCategoryInput(e.target.value)} className="flex-1 border rounded-xl p-3 focus:outline-none focus:border-blue-500" placeholder="새 카테고리 이름" /><button onClick={handleAddCategory} disabled={!newCategoryInput.trim()} className={`px-4 rounded-xl font-bold text-white transition ${newCategoryInput.trim() ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-300'}`}>추가</button></div>
+             <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">{categories.map(cat => (<div key={cat} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl"><span className="font-medium text-slate-700">{cat}</span><button onClick={() => handleDeleteCategory(cat)} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition" title="삭제"><Trash2 className="w-4 h-4" /></button></div>))}</div>
            </div>
         </Modal>
       )}
 
-      {/* --- Settings Modal --- */}
       {isSettingsOpen && (
-        <Modal title="환경 설정" onClose={() => {
-           setIsSettingsOpen(false);
-           setIsAddingFridge(false); // Reset add fridge mode
-           setShowResetVerify(false);
-           setResetInput('');
-        }}>
+        <Modal title="환경 설정" onClose={() => {setIsSettingsOpen(false); setIsAddingFridge(false); setShowResetVerify(false); setResetInput('');}}>
           <div className="flex border-b mb-4">
-             <button 
-                className={`px-4 py-2 font-bold ${settingsTab === 'fridges' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'}`}
-                onClick={() => setSettingsTab('fridges')}
-             >
-                냉장고 관리
-             </button>
-             <button 
-                className={`px-4 py-2 font-bold ${settingsTab === 'profiles' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'}`}
-                onClick={() => setSettingsTab('profiles')}
-             >
-                가족/알림
-             </button>
-             <button 
-                className={`px-4 py-2 font-bold ${settingsTab === 'data' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'}`}
-                onClick={() => setSettingsTab('data')}
-             >
-                데이터
-             </button>
+             <button className={`px-4 py-2 font-bold ${settingsTab === 'fridges' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'}`} onClick={() => setSettingsTab('fridges')}>냉장고 관리</button>
+             <button className={`px-4 py-2 font-bold ${settingsTab === 'profiles' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'}`} onClick={() => setSettingsTab('profiles')}>가족/알림</button>
+             <button className={`px-4 py-2 font-bold ${settingsTab === 'data' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500'}`} onClick={() => setSettingsTab('data')}>데이터</button>
           </div>
-
           <div className="space-y-6">
-            
-            {/* FRIDGES TAB */}
             {settingsTab === 'fridges' && (
               <>
                 {!isAddingFridge ? (
-                  <div className="bg-blue-50 p-4 rounded-xl flex items-center justify-between">
-                     <div>
-                        <h4 className="font-bold text-blue-900">새 냉장고 추가</h4>
-                        <p className="text-xs text-blue-700">김치냉장고 등 서브 냉장고를 추가해보세요.</p>
-                     </div>
-                     <button onClick={handleStartAddFridge} className="bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700">
-                        <Plus className="w-5 h-5" />
-                     </button>
-                  </div>
+                  <div className="bg-blue-50 p-4 rounded-xl flex items-center justify-between"><div><h4 className="font-bold text-blue-900">새 냉장고 추가</h4><p className="text-xs text-blue-700">김치냉장고 등 서브 냉장고를 추가해보세요.</p></div><button onClick={handleStartAddFridge} className="bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700"><Plus className="w-5 h-5" /></button></div>
                 ) : (
-                  <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-3">
-                     <h4 className="font-bold text-blue-900">냉장고 정보 입력</h4>
-                     <input 
-                       type="text" 
-                       value={newFridgeName}
-                       onChange={(e) => setNewFridgeName(e.target.value)}
-                       placeholder="예: 김치냉장고"
-                       className="w-full border rounded-lg p-2 text-sm"
-                     />
-                     <div>
-                       <label className="block text-xs font-semibold text-blue-800 mb-1">문 개수</label>
-                       <div className="flex gap-2">
-                         {[1, 2, 3, 4].map(num => (
-                           <button
-                             key={num}
-                             onClick={() => setNewFridgeDoorCount(num as any)}
-                             className={`flex-1 py-1 rounded text-sm font-bold border ${
-                               newFridgeDoorCount === num 
-                               ? 'bg-blue-600 text-white border-blue-600' 
-                               : 'bg-white text-blue-600 border-blue-200'
-                             }`}
-                           >
-                             {num}개
-                           </button>
-                         ))}
-                       </div>
-                     </div>
-                     <div className="flex gap-2 pt-2">
-                        <button onClick={() => setIsAddingFridge(false)} className="flex-1 py-2 bg-white border border-gray-300 rounded-lg text-sm text-gray-600">취소</button>
-                        <button onClick={handleSubmitAddFridge} className="flex-1 py-2 bg-blue-600 rounded-lg text-sm text-white font-bold">추가 완료</button>
-                     </div>
-                  </div>
+                  <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-3"><h4 className="font-bold text-blue-900">냉장고 정보 입력</h4><input type="text" value={newFridgeName} onChange={(e) => setNewFridgeName(e.target.value)} placeholder="예: 김치냉장고" className="w-full border rounded-lg p-2 text-sm" /><div><label className="block text-xs font-semibold text-blue-800 mb-1">문 개수</label><div className="flex gap-2">{[1, 2, 3, 4].map(num => (<button key={num} onClick={() => setNewFridgeDoorCount(num as any)} className={`flex-1 py-1 rounded text-sm font-bold border ${newFridgeDoorCount === num ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-200'}`}>{num}개</button>))}</div></div><div className="flex gap-2 pt-2"><button onClick={() => setIsAddingFridge(false)} className="flex-1 py-2 bg-white border border-gray-300 rounded-lg text-sm text-gray-600">취소</button><button onClick={handleSubmitAddFridge} className="flex-1 py-2 bg-blue-600 rounded-lg text-sm text-white font-bold">추가 완료</button></div></div>
                 )}
-
-                <div className="space-y-4">
-                  {config.fridges.map((fridge, fIndex) => (
-                    <div key={fridge.id} className="border rounded-xl p-4">
-                       <div className="flex justify-between items-center mb-3">
-                          <input 
-                            type="text" 
-                            value={fridge.name}
-                            onChange={(e) => {
-                               const newFridges = [...config.fridges];
-                               newFridges[fIndex].name = e.target.value;
-                               setConfig({...config, fridges: newFridges});
-                            }}
-                            className="font-bold text-lg border-b border-dashed focus:outline-none focus:border-blue-500 w-full mr-2"
-                          />
-                          <button 
-                            onClick={() => handleDeleteFridge(fridge.id)}
-                            className="text-red-400 hover:text-red-600 p-1"
-                            title="냉장고 삭제"
-                          >
-                             <Trash2 className="w-5 h-5" />
-                          </button>
-                       </div>
-                       
-                       <div className="space-y-2 pl-2 border-l-2 border-slate-100">
-                          {fridge.doors.map((door, dIndex) => (
-                             <div key={door.id} className="flex gap-2 items-center">
-                                <span className="text-xs text-slate-400 w-4">{dIndex + 1}</span>
-                                <input 
-                                  type="text" 
-                                  value={door.name}
-                                  onChange={(e) => {
-                                    const newFridges = [...config.fridges];
-                                    newFridges[fIndex].doors[dIndex].name = e.target.value;
-                                    setConfig({...config, fridges: newFridges});
-                                  }}
-                                  className="flex-1 border rounded-lg p-1.5 text-sm"
-                                />
-                                <select
-                                  value={door.type}
-                                  onChange={(e) => {
-                                    const newFridges = [...config.fridges];
-                                    newFridges[fIndex].doors[dIndex].type = e.target.value as DoorType;
-                                    setConfig({...config, fridges: newFridges});
-                                  }}
-                                  className="border rounded-lg p-1.5 text-xs bg-white"
-                                >
-                                  <option value="fridge">냉장실</option>
-                                  <option value="freezer">냉동실</option>
-                                  <option value="pantry">상온/실온</option>
-                                </select>
-                             </div>
-                          ))}
-                       </div>
-                    </div>
-                  ))}
-                </div>
+                <div className="space-y-4">{config.fridges.map((fridge, fIndex) => (<div key={fridge.id} className="border rounded-xl p-4"><div className="flex justify-between items-center mb-3"><input type="text" value={fridge.name} onChange={(e) => {const newFridges = [...config.fridges]; newFridges[fIndex].name = e.target.value; setConfig({...config, fridges: newFridges});}} className="font-bold text-lg border-b border-dashed focus:outline-none focus:border-blue-500 w-full mr-2" /><button onClick={() => handleDeleteFridge(fridge.id)} className="text-red-400 hover:text-red-600 p-1" title="냉장고 삭제"><Trash2 className="w-5 h-5" /></button></div><div className="space-y-2 pl-2 border-l-2 border-slate-100">{fridge.doors.map((door, dIndex) => (<div key={door.id} className="flex gap-2 items-center"><span className="text-xs text-slate-400 w-4">{dIndex + 1}</span><input type="text" value={door.name} onChange={(e) => {const newFridges = [...config.fridges]; newFridges[fIndex].doors[dIndex].name = e.target.value; setConfig({...config, fridges: newFridges});}} className="flex-1 border rounded-lg p-1.5 text-sm" /><select value={door.type} onChange={(e) => {const newFridges = [...config.fridges]; newFridges[fIndex].doors[dIndex].type = e.target.value as DoorType; setConfig({...config, fridges: newFridges});}} className="border rounded-lg p-1.5 text-xs bg-white"><option value="fridge">냉장실</option><option value="freezer">냉동실</option><option value="pantry">상온/실온</option></select></div>))}</div></div>))}</div>
               </>
             )}
-
-            {/* PROFILES TAB */}
             {settingsTab === 'profiles' && (
               <>
-               <div>
-                 <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
-                   <Bell className="w-5 h-5" /> 알림 설정
-                 </h3>
-                 <div className="bg-slate-50 p-4 rounded-xl flex justify-between items-center">
-                    <div>
-                      <h4 className="font-bold text-slate-700">소비기한 임박 알림</h4>
-                      <p className="text-sm text-slate-500">소비기한 3일 전부터 매일 알림을 보냅니다.</p>
-                    </div>
-                    <button 
-                      onClick={requestNotificationPermission}
-                      disabled={notificationPermission === 'granted'}
-                      className={`px-4 py-2 rounded-xl font-bold transition flex items-center gap-2 ${
-                        notificationPermission === 'granted' 
-                        ? 'bg-green-100 text-green-700' 
-                        : 'bg-blue-600 text-white hover:bg-blue-700'
-                      }`}
-                    >
-                      {notificationPermission === 'granted' ? (
-                        <><Check className="w-4 h-4" /> 알림 켜짐</>
-                      ) : (
-                        <><Bell className="w-4 h-4" /> 알림 켜기</>
-                      )}
-                    </button>
-                 </div>
-                 {notificationPermission === 'denied' && (
-                   <p className="text-xs text-red-500 mt-2 px-1">⚠️ 브라우저 설정에서 알림 권한이 차단되었습니다.</p>
-                 )}
-               </div>
-
-               <div className="pt-4 border-t">
-                <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
-                  <User className="w-5 h-5" /> 가족 및 식이 제한
-                </h3>
-                <div className="space-y-4">
-                  {config.userProfiles.map(profile => (
-                    <div key={profile.id} className="bg-slate-50 p-3 rounded-xl flex items-start gap-2">
-                       <div className="flex-1 space-y-2">
-                          <input 
-                            type="text" 
-                            placeholder="이름 (예: 아빠)" 
-                            value={profile.name}
-                            onChange={(e) => {
-                              const newProfiles = config.userProfiles.map(p => p.id === profile.id ? {...p, name: e.target.value} : p);
-                              setConfig({...config, userProfiles: newProfiles});
-                            }}
-                            className="w-full border rounded p-1 text-sm font-bold"
-                          />
-                          <input 
-                            type="text" 
-                            placeholder="못 먹는 음식 (예: 우유, 땅콩)" 
-                            value={profile.restrictions}
-                            onChange={(e) => {
-                              const newProfiles = config.userProfiles.map(p => p.id === profile.id ? {...p, restrictions: e.target.value} : p);
-                              setConfig({...config, userProfiles: newProfiles});
-                            }}
-                            className="w-full border rounded p-1 text-sm text-red-600 bg-red-50/50 placeholder-red-200"
-                          />
-                       </div>
-                       <button 
-                         onClick={() => {
-                           const newProfiles = config.userProfiles.filter(p => p.id !== profile.id);
-                           setConfig({...config, userProfiles: newProfiles});
-                         }}
-                         className="p-1 text-gray-400 hover:text-red-500"
-                       >
-                         <X className="w-4 h-4" />
-                       </button>
-                    </div>
-                  ))}
-                  <button 
-                    onClick={() => {
-                      const newProfile: UserProfile = { id: Date.now().toString(), name: '', restrictions: '' };
-                      setConfig({...config, userProfiles: [...config.userProfiles, newProfile]});
-                    }}
-                    className="w-full py-2 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 hover:border-blue-500 hover:text-blue-500 flex items-center justify-center gap-2 font-bold"
-                  >
-                    <UserPlus className="w-4 h-4" /> 가족 구성원 추가
-                  </button>
-                </div>
-               </div>
+               <div><h3 className="text-lg font-bold mb-3 flex items-center gap-2"><Bell className="w-5 h-5" /> 알림 설정</h3><div className="bg-slate-50 p-4 rounded-xl flex justify-between items-center"><div><h4 className="font-bold text-slate-700">소비기한 임박 알림</h4><p className="text-sm text-slate-500">소비기한 3일 전부터 매일 알림을 보냅니다.</p></div><button onClick={requestNotificationPermission} disabled={notificationPermission === 'granted'} className={`px-4 py-2 rounded-xl font-bold transition flex items-center gap-2 ${notificationPermission === 'granted' ? 'bg-green-100 text-green-700' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>{notificationPermission === 'granted' ? (<><Check className="w-4 h-4" /> 알림 켜짐</>) : (<><Bell className="w-4 h-4" /> 알림 켜기</>)}</button></div>{notificationPermission === 'denied' && (<p className="text-xs text-red-500 mt-2 px-1">⚠️ 브라우저 설정에서 알림 권한이 차단되었습니다.</p>)}</div>
+               <div className="pt-4 border-t"><h3 className="text-lg font-bold mb-3 flex items-center gap-2"><User className="w-5 h-5" /> 가족 및 식이 제한</h3><div className="space-y-4">{config.userProfiles.map(profile => (<div key={profile.id} className="bg-slate-50 p-3 rounded-xl flex items-start gap-2"><div className="flex-1 space-y-2"><input type="text" placeholder="이름 (예: 아빠)" value={profile.name} onChange={(e) => {const newProfiles = config.userProfiles.map(p => p.id === profile.id ? {...p, name: e.target.value} : p); setConfig({...config, userProfiles: newProfiles});}} className="w-full border rounded p-1 text-sm font-bold" /><input type="text" placeholder="못 먹는 음식 (예: 우유, 땅콩)" value={profile.restrictions} onChange={(e) => {const newProfiles = config.userProfiles.map(p => p.id === profile.id ? {...p, restrictions: e.target.value} : p); setConfig({...config, userProfiles: newProfiles});}} className="w-full border rounded p-1 text-sm text-red-600 bg-red-50/50 placeholder-red-200" /></div><button onClick={() => {const newProfiles = config.userProfiles.filter(p => p.id !== profile.id); setConfig({...config, userProfiles: newProfiles});}} className="p-1 text-gray-400 hover:text-red-500"><X className="w-4 h-4" /></button></div>))}<button onClick={() => {const newProfile: UserProfile = { id: Date.now().toString(), name: '', restrictions: '' }; setConfig({...config, userProfiles: [...config.userProfiles, newProfile]});}} className="w-full py-2 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 hover:border-blue-500 hover:text-blue-500 flex items-center justify-center gap-2 font-bold"><UserPlus className="w-4 h-4" /> 가족 구성원 추가</button></div></div>
               </>
             )}
-
-            {/* DATA TAB */}
             {settingsTab === 'data' && (
               <>
-                 <div>
-                   <label className="block text-sm font-semibold text-slate-700 mb-2">우리집 이름 (메인 제목)</label>
-                   <input 
-                     type="text" 
-                     value={config.name}
-                     onChange={(e) => setConfig({...config, name: e.target.value})}
-                     className="w-full border rounded-xl p-3 focus:border-blue-500 outline-none"
-                   />
-                 </div>
-
-                 <div className="flex gap-4 pt-4 border-t">
-                   <button 
-                     onClick={handleExportData}
-                     className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition"
-                   >
-                     <Download className="w-5 h-5" />
-                     백업 (내보내기)
-                   </button>
-                   <button 
-                     onClick={handleImportClick}
-                     className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition"
-                   >
-                     <Upload className="w-5 h-5" />
-                     복원 (가져오기)
-                   </button>
-                   <input 
-                     type="file" 
-                     ref={fileInputRef} 
-                     onChange={handleFileChange} 
-                     accept=".json" 
-                     className="hidden" 
-                   />
-                 </div>
-
-                 <div className="pt-4 border-t">
-                   {!showResetVerify ? (
-                     <button 
-                       onClick={() => setShowResetVerify(true)}
-                       className="text-red-500 text-sm hover:underline w-full text-left font-bold"
-                     >
-                       ⚠️ 모든 데이터 초기화
-                     </button>
-                   ) : (
-                     <div className="bg-red-50 p-4 rounded-xl border border-red-100 space-y-3 animate-fade-in">
-                        <h4 className="font-bold text-red-700 flex items-center gap-2">
-                          <AlertCircle className="w-4 h-4" />
-                          데이터 초기화 확인
-                        </h4>
-                        <p className="text-sm text-red-600">
-                          초기화하려면 현재 우리집 이름 <strong>"{config.name}"</strong>을(를) 정확히 입력하세요.
-                        </p>
-                        <input 
-                          type="text" 
-                          value={resetInput}
-                          onChange={e => setResetInput(e.target.value)}
-                          className="w-full border border-red-200 rounded-lg p-2 text-sm focus:outline-none focus:border-red-500"
-                          placeholder={config.name}
-                        />
-                        <div className="flex gap-2">
-                          <button 
-                            onClick={handleHardReset}
-                            disabled={resetInput.trim() !== config.name.trim()}
-                            className={`flex-1 py-2 rounded-lg text-sm font-bold text-white transition ${
-                              resetInput.trim() === config.name.trim() ? 'bg-red-600 hover:bg-red-700 shadow-md' : 'bg-gray-300 cursor-not-allowed'
-                            }`}
-                          >
-                            초기화 실행
-                          </button>
-                          <button 
-                            onClick={() => {
-                              setShowResetVerify(false);
-                              setResetInput('');
-                            }}
-                            className="px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50"
-                          >
-                            취소
-                          </button>
-                        </div>
-                     </div>
-                   )}
-                </div>
+                 <div><label className="block text-sm font-semibold text-slate-700 mb-2">우리집 이름 (메인 제목)</label><input type="text" value={config.name} onChange={(e) => setConfig({...config, name: e.target.value})} className="w-full border rounded-xl p-3 focus:border-blue-500 outline-none" /></div>
+                 <div className="flex gap-4 pt-4 border-t"><button onClick={handleExportData} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition"><Download className="w-5 h-5" />백업 (내보내기)</button><button onClick={handleImportClick} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition"><Upload className="w-5 h-5" />복원 (가져오기)</button><input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".json" className="hidden" /></div>
+                 <div className="pt-4 border-t">{!showResetVerify ? (<button onClick={() => setShowResetVerify(true)} className="text-red-500 text-sm hover:underline w-full text-left font-bold">⚠️ 모든 데이터 초기화</button>) : (<div className="bg-red-50 p-4 rounded-xl border border-red-100 space-y-3 animate-fade-in"><h4 className="font-bold text-red-700 flex items-center gap-2"><AlertCircle className="w-4 h-4" />데이터 초기화 확인</h4><p className="text-sm text-red-600">초기화하려면 현재 우리집 이름 <strong>"{config.name}"</strong>을(를) 정확히 입력하세요.</p><input type="text" value={resetInput} onChange={e => setResetInput(e.target.value)} className="w-full border border-red-200 rounded-lg p-2 text-sm focus:outline-none focus:border-red-500" placeholder={config.name} /><div className="flex gap-2"><button onClick={handleHardReset} disabled={resetInput.trim() !== config.name.trim()} className={`flex-1 py-2 rounded-lg text-sm font-bold text-white transition ${resetInput.trim() === config.name.trim() ? 'bg-red-600 hover:bg-red-700 shadow-md' : 'bg-gray-300 cursor-not-allowed'}`}>초기화 실행</button><button onClick={() => {setShowResetVerify(false); setResetInput('');}} className="px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50">취소</button></div></div>)}</div>
               </>
             )}
-
-            <button onClick={() => setIsSettingsOpen(false)} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-200 mt-4">
-              닫기
-            </button>
+            <button onClick={() => setIsSettingsOpen(false)} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-200 mt-4">닫기</button>
           </div>
         </Modal>
       )}
 
-      {/* --- Delete Fridge Modal (Moved to bottom for stacking context) --- */}
       {fridgeToDelete && (
          <Modal title="냉장고 삭제 확인" onClose={() => setFridgeToDelete(null)} zIndexClass="z-[60]">
             <div className="space-y-6">
-              <div className="bg-red-50 p-6 rounded-2xl flex flex-col items-center text-center">
-                 <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
-                    <Trash2 className="w-8 h-8" />
-                 </div>
-                 <h3 className="text-xl font-bold text-slate-800 mb-2">
-                   정말 삭제하시겠습니까?
-                 </h3>
-                 <p className="text-slate-600 text-sm mb-4">
-                   선택한 냉장고와 <strong>보관된 모든 식재료</strong>가 영구적으로 삭제됩니다.<br/>
-                   삭제하려면 냉장고 이름을 입력하세요.
-                 </p>
-                 
-                 <div className="w-full bg-white p-3 rounded-xl border border-red-200">
-                    <p className="text-xs text-slate-500 mb-1">삭제할 냉장고 이름</p>
-                    <p className="font-bold text-slate-800 mb-2">
-                      {config.fridges.find(f => f.id === fridgeToDelete)?.name}
-                    </p>
-                    <input 
-                      type="text" 
-                      value={deleteConfirmationInput}
-                      onChange={(e) => setDeleteConfirmationInput(e.target.value)}
-                      placeholder="냉장고 이름을 정확히 입력"
-                      className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:outline-none focus:border-red-500 text-center"
-                    />
-                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                 <button 
-                   onClick={() => setFridgeToDelete(null)}
-                   className="py-4 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition"
-                 >
-                   취소
-                 </button>
-                 <button 
-                   onClick={confirmDeleteFridge}
-                   disabled={deleteConfirmationInput.trim() !== config.fridges.find(f => f.id === fridgeToDelete)?.name.trim()}
-                   className={`py-4 rounded-xl font-bold text-white transition shadow-lg ${
-                     deleteConfirmationInput.trim() === config.fridges.find(f => f.id === fridgeToDelete)?.name.trim()
-                     ? 'bg-red-600 hover:bg-red-700 shadow-red-200'
-                     : 'bg-gray-300 cursor-not-allowed shadow-none'
-                   }`}
-                 >
-                   삭제하기
-                 </button>
-              </div>
+              <div className="bg-red-50 p-6 rounded-2xl flex flex-col items-center text-center"><div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4"><Trash2 className="w-8 h-8" /></div><h3 className="text-xl font-bold text-slate-800 mb-2">정말 삭제하시겠습니까?</h3><p className="text-slate-600 text-sm mb-4">선택한 냉장고와 <strong>보관된 모든 식재료</strong>가 영구적으로 삭제됩니다.<br/>삭제하려면 냉장고 이름을 입력하세요.</p><div className="w-full bg-white p-3 rounded-xl border border-red-200"><p className="text-xs text-slate-500 mb-1">삭제할 냉장고 이름</p><p className="font-bold text-slate-800 mb-2">{config.fridges.find(f => f.id === fridgeToDelete)?.name}</p><input type="text" value={deleteConfirmationInput} onChange={(e) => setDeleteConfirmationInput(e.target.value)} placeholder="냉장고 이름을 정확히 입력" className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:outline-none focus:border-red-500 text-center" /></div></div>
+              <div className="grid grid-cols-2 gap-4"><button onClick={() => setFridgeToDelete(null)} className="py-4 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition">취소</button><button onClick={confirmDeleteFridge} disabled={deleteConfirmationInput.trim() !== config.fridges.find(f => f.id === fridgeToDelete)?.name.trim()} className={`py-4 rounded-xl font-bold text-white transition shadow-lg ${deleteConfirmationInput.trim() === config.fridges.find(f => f.id === fridgeToDelete)?.name.trim() ? 'bg-red-600 hover:bg-red-700 shadow-red-200' : 'bg-gray-300 cursor-not-allowed shadow-none'}`}>삭제하기</button></div>
             </div>
          </Modal>
       )}
@@ -2468,45 +1573,9 @@ function SetupForm({ onComplete }: { onComplete: (name: string, doorCount: 1|2|3
 
   return (
     <>
-      <div>
-        <label className="block text-sm font-semibold text-slate-700 mb-2">첫번째 냉장고 이름</label>
-        <input 
-          type="text" 
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="w-full border-2 border-slate-200 rounded-xl p-4 text-lg focus:border-blue-500 outline-none transition"
-          placeholder="예: 주방 냉장고"
-        />
-      </div>
-
-      <div>
-        <label className="block text-sm font-semibold text-slate-700 mb-2">문 개수</label>
-        <div className="grid grid-cols-4 gap-2">
-          {[1, 2, 3, 4].map(num => (
-            <button
-              key={num}
-              onClick={() => setDoorCount(num as 1|2|3|4)}
-              className={`p-4 rounded-xl border-2 text-xl font-bold transition-all ${
-                doorCount === num 
-                ? 'border-blue-500 bg-blue-50 text-blue-600' 
-                : 'border-slate-200 hover:border-blue-200'
-              }`}
-            >
-              {num}개
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <button
-        onClick={() => {
-           if(name.trim()) onComplete(name, doorCount);
-           else alert("냉장고 이름을 입력해주세요.");
-        }}
-        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl text-lg shadow-lg shadow-blue-200 transition-all mt-8"
-      >
-        시작하기
-      </button>
+      <div><label className="block text-sm font-semibold text-slate-700 mb-2">첫번째 냉장고 이름</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} className="w-full border-2 border-slate-200 rounded-xl p-4 text-lg focus:border-blue-500 outline-none transition" placeholder="예: 주방 냉장고" /></div>
+      <div><label className="block text-sm font-semibold text-slate-700 mb-2">문 개수</label><div className="grid grid-cols-4 gap-2">{[1, 2, 3, 4].map(num => (<button key={num} onClick={() => setDoorCount(num as 1|2|3|4)} className={`p-4 rounded-xl border-2 text-xl font-bold transition-all ${doorCount === num ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-slate-200 hover:border-blue-200'}`}>{num}개</button>))}</div></div>
+      <button onClick={() => {if(name.trim()) onComplete(name, doorCount); else alert("냉장고 이름을 입력해주세요.");}} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl text-lg shadow-lg shadow-blue-200 transition-all mt-8">시작하기</button>
     </>
   )
 }
